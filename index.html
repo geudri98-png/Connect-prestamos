@@ -14,7 +14,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
-    <!-- html2canvas para Recibos -->
+    <!-- html2canvas para Recibos y Fotos -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;600;700;800;900&display=swap');
@@ -107,7 +107,12 @@
                 "x": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
                 "download": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
                 "printer": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>,
-                "clock": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                "clock": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>,
+                "bell": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>,
+                "user": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>,
+                "shield": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>,
+                "mail": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>,
+                "lock": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
             };
             return <span className={`icon-container inline-flex items-center justify-center ${className}`}>{icons[name] || null}</span>;
         };
@@ -120,6 +125,7 @@
             const [searchTerm, setSearchTerm] = useState('');
             const [notification, setNotification] = useState(null);
             const [receiptData, setReceiptData] = useState(null);
+            const [reminderClient, setReminderClient] = useState(null);
             const [loading, setLoading] = useState(true);
             const [showSplash, setShowSplash] = useState(true);
             const [isGeneratingImage, setIsGeneratingImage] = useState(false);
@@ -127,8 +133,17 @@
             const [earningsFilter, setEarningsFilter] = useState('todas');
             const [earningsSearch, setEarningsSearch] = useState('');
             const [deleteConfirm, setDeleteConfirm] = useState(null);
+            const [deletePaymentConfirm, setDeletePaymentConfirm] = useState(null);
+            
+            // Perfil de usuario para configuraciones
+            const [userProfile, setUserProfile] = useState({ smsAuto: false });
+
+            // Nuevos estados para Cartera
+            const [portfolioSearch, setPortfolioSearch] = useState('');
+            const [portfolioFilter, setPortfolioFilter] = useState('all'); // all, active, inactive
 
             const receiptRef = useRef(null);
+            const reminderRef = useRef(null);
 
             useEffect(() => {
                 const unsubscribe = auth.onAuthStateChanged((u) => {
@@ -150,7 +165,13 @@
                         const data = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                         startTransition(() => { setClients(data); });
                     }, (err) => console.error("Firestore error:", err));
-                return () => unsub();
+                    
+                const unsubProfile = db.collection('users').doc(user.uid)
+                    .onSnapshot((doc) => {
+                        if (doc.exists) setUserProfile(doc.data());
+                    });
+                    
+                return () => { unsub(); unsubProfile(); }
             }, [user]);
 
             const showNotify = (msg) => {
@@ -158,9 +179,22 @@
                 setTimeout(() => setNotification(null), 3000);
             };
 
+            // Función robusta de parseo de fechas (Solución a gestión de fechas)
+            const parseDateString = (dateStr) => {
+                let d = new Date(dateStr);
+                if (!isNaN(d.getTime())) return d;
+                
+                // Fallback para formato dd/mm/yyyy o dd-mm-yyyy
+                const parts = dateStr.split(/[-/]/);
+                if (parts.length === 3) {
+                    d = new Date(`${parts[2]}-${parts[1]}-${parts[0]}T12:00:00`);
+                    if (!isNaN(d.getTime())) return d;
+                }
+                return new Date(); // Fallback final
+            };
+
             const calculateNextDate = (currentDateStr, frequency) => {
-                const date = new Date(currentDateStr);
-                if (isNaN(date.getTime())) return new Date().toLocaleDateString();
+                const date = parseDateString(currentDateStr);
                 switch(frequency) {
                     case 'Diario': date.setDate(date.getDate() + 1); break;
                     case 'Semanal': date.setDate(date.getDate() + 7); break;
@@ -171,28 +205,49 @@
                 return date.toLocaleDateString();
             };
 
-            const handleShare = async () => {
-                if (!receiptRef.current) return;
+            const handleShare = async (ref, fileName, title) => {
+                if (!ref.current) return;
                 setIsGeneratingImage(true);
                 try {
-                    const canvas = await html2canvas(receiptRef.current, { scale: 2, useCORS: true, backgroundColor: '#ffffff' });
+                    const canvas = await html2canvas(ref.current, { scale: 2, useCORS: true, backgroundColor: '#ffffff' });
                     const blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
-                    const file = new File([blob], `Recibo_${receiptData.transaction.ref}.png`, { type: 'image/png' });
-                    if (navigator.share) await navigator.share({ files: [file], title: 'Recibo de Pago' });
-                    else {
+                    const file = new File([blob], `${fileName}.png`, { type: 'image/png' });
+                    
+                    if (navigator.share) {
+                        try {
+                            await navigator.share({ files: [file], title: title });
+                        } catch (err) {
+                            // Fallback automático si navigator.share falla
+                            const link = document.createElement('a');
+                            link.download = `${fileName}.png`;
+                            link.href = canvas.toDataURL();
+                            link.click();
+                        }
+                    } else {
                         const link = document.createElement('a');
-                        link.download = `Recibo_${receiptData.transaction.ref}.png`;
+                        link.download = `${fileName}.png`;
                         link.href = canvas.toDataURL();
                         link.click();
                     }
-                } catch (e) { console.error("Share error:", e); } finally { setIsGeneratingImage(false); }
+                } catch (e) { 
+                    console.error("Share error:", e); 
+                    showNotify("Error al generar la imagen");
+                } finally { 
+                    setIsGeneratingImage(false); 
+                }
             };
 
-            const recordTransaction = async (clientId, amount) => {
+            const recordTransaction = async (clientId, amount, paymentDateStr) => {
                 const client = clients.find(c => c.id === clientId);
                 if (!client) return;
                 const num = parseFloat(amount.toString().replace(/,/g, ''));
                 if (isNaN(num) || num <= 0) { showNotify("Monto no válido"); return; }
+
+                let displayDate = new Date().toLocaleDateString();
+                if (paymentDateStr) {
+                    const [y, m, d] = paymentDateStr.split('-');
+                    if (y && m && d) displayDate = `${d}/${m}/${y}`;
+                }
 
                 const currentPaid = client.loan?.paidInstallments || 0;
                 const instBaseAmount = client.loan?.installmentAmount || 0;
@@ -207,14 +262,16 @@
                 
                 let nextDate = client.loan.nextPaymentDate || new Date().toLocaleDateString();
                 if (installmentsCovered > 0) {
-                    for(let i=0; i < installmentsCovered; i++) { nextDate = calculateNextDate(nextDate, client.loan.frequency); }
+                    for(let i=0; i < installmentsCovered; i++) { 
+                        nextDate = calculateNextDate(nextDate, client.loan.frequency); 
+                    }
                 }
 
                 const entry = {
                     id: Date.now().toString(),
                     amount: num,
                     surplus: surplus,
-                    date: new Date().toLocaleDateString(),
+                    date: displayDate,
                     type: 'Pago',
                     description: installmentsCovered > 0 ? `Pago ${installmentsCovered} Cuota(s)` : 'Abono parcial',
                     ref: 'REC-' + Math.floor(1000 + Math.random() * 8999),
@@ -248,12 +305,65 @@
                 } catch(e) { showNotify("Error al eliminar"); }
             };
 
+            const deletePayment = async () => {
+                if(!deletePaymentConfirm || !selectedClientId) return;
+                const client = clients.find(c => c.id === selectedClientId);
+                const payment = deletePaymentConfirm;
+
+                // Sacamos el pago del historial
+                const newHistory = client.history.filter(h => h.id !== payment.id);
+                
+                let updateData = {
+                    history: newHistory,
+                    totalDebt: client.totalDebt + payment.amount
+                };
+
+                // Si hay un préstamo activo, revertimos las cuotas y la fecha
+                if (client.loan) {
+                    const currentTotalPaid = (client.loan.paidInstallments * client.loan.installmentAmount) + (client.loan.partialCredit || 0);
+                    const newTotalPaid = Math.max(0, currentTotalPaid - payment.amount);
+                    
+                    const newPaidInstallments = Math.floor((newTotalPaid + 0.001) / client.loan.installmentAmount);
+                    const newPartialCredit = Math.max(0, newTotalPaid - (newPaidInstallments * client.loan.installmentAmount));
+
+                    // Intentamos retroceder la fecha de cobro según las cuotas eliminadas
+                    let revertedDate = client.loan.nextPaymentDate;
+                    const installmentsDiff = client.loan.paidInstallments - newPaidInstallments;
+                    
+                    if (installmentsDiff > 0 && revertedDate) {
+                        const d = parseDateString(revertedDate);
+                        for(let i=0; i < installmentsDiff; i++) {
+                            switch(client.loan.frequency) {
+                                case 'Diario': d.setDate(d.getDate() - 1); break;
+                                case 'Semanal': d.setDate(d.getDate() - 7); break;
+                                case 'Quincenal': d.setDate(d.getDate() - 15); break;
+                                case 'Mensual': d.setMonth(d.getMonth() - 1); break;
+                            }
+                        }
+                        revertedDate = d.toLocaleDateString();
+                    }
+
+                    updateData['loan.paidInstallments'] = newPaidInstallments;
+                    updateData['loan.partialCredit'] = newPartialCredit;
+                    updateData['loan.nextPaymentDate'] = revertedDate;
+                }
+
+                try {
+                    await db.collection('users').doc(user.uid).collection('clients').doc(selectedClientId).update(updateData);
+                    setDeletePaymentConfirm(null);
+                    showNotify("Pago anulado y saldo restaurado");
+                } catch(e) {
+                    showNotify("Error al anular el pago");
+                }
+            };
+
             const updateClient = async (e) => {
                 e.preventDefault();
                 const data = {
                     name: e.target.name.value,
                     cedula: e.target.cedula.value,
                     phone: e.target.phone.value,
+                    email: e.target.email?.value || '',
                     address: e.target.address.value,
                 };
                 try {
@@ -279,6 +389,30 @@
                     }
                 });
                 setView('profile'); showNotify("Préstamo asignado");
+            };
+
+            const handleUpdateEmail = async (e) => {
+                e.preventDefault();
+                try {
+                    await auth.currentUser.verifyBeforeUpdateEmail(e.target.email.value);
+                    showNotify("Revisa tu nueva bandeja de entrada para verificar el correo.");
+                    e.target.reset();
+                } catch (error) {
+                    if (error.code === 'auth/requires-recent-login') showNotify("Por seguridad, cierra sesión y vuelve a entrar para cambiar datos sensibles.");
+                    else showNotify("Error al actualizar correo: " + error.message);
+                }
+            };
+
+            const handleUpdatePassword = async (e) => {
+                e.preventDefault();
+                try {
+                    await auth.currentUser.updatePassword(e.target.password.value);
+                    showNotify("Contraseña actualizada exitosamente");
+                    e.target.reset();
+                } catch (error) {
+                    if (error.code === 'auth/requires-recent-login') showNotify("Por seguridad, cierra sesión y vuelve a entrar.");
+                    else showNotify("Error al actualizar contraseña");
+                }
             };
 
             const downloadCSV = () => {
@@ -355,6 +489,18 @@
                 );
             }, [clients, searchTerm]);
 
+            // Filtrado específico para la Cartera
+            const portfolioFilteredClients = useMemo(() => {
+                const s = portfolioSearch.toLowerCase();
+                return clients.filter(c => {
+                    const matchSearch = c.name.toLowerCase().includes(s) || (c.cedula && c.cedula.includes(s)) || (c.phone && c.phone.includes(s));
+                    let matchFilter = true;
+                    if (portfolioFilter === 'active') matchFilter = c.loan && c.totalDebt > 0;
+                    if (portfolioFilter === 'inactive') matchFilter = !c.loan || c.totalDebt <= 0;
+                    return matchSearch && matchFilter;
+                });
+            }, [clients, portfolioSearch, portfolioFilter]);
+
             if (showSplash) {
                 return (
                     <div className="fixed inset-0 z-[500] bg-slate-950 flex flex-col items-center justify-center splash-fade-out">
@@ -373,7 +519,7 @@
                 <div className="max-w-md mx-auto min-h-screen bg-slate-50 shadow-2xl relative overflow-x-hidden">
                     {notification && <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[110] bg-slate-900 text-white px-6 py-3 rounded-2xl text-xs font-black shadow-2xl animate-in">{notification}</div>}
 
-                    {/* MODAL ELIMINAR */}
+                    {/* MODAL ELIMINAR CLIENTE */}
                     {deleteConfirm && (
                         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[300] flex items-center justify-center p-6">
                             <div className="bg-white rounded-[2rem] p-8 w-full max-w-xs text-center shadow-2xl animate-in">
@@ -388,6 +534,21 @@
                         </div>
                     )}
 
+                    {/* MODAL ELIMINAR PAGO */}
+                    {deletePaymentConfirm && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[300] flex items-center justify-center p-6">
+                            <div className="bg-white rounded-[2rem] p-8 w-full max-w-xs text-center shadow-2xl animate-in">
+                                <div className="w-16 h-16 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4"><Icon name="trash-2" size={32}/></div>
+                                <h3 className="text-xl font-black mb-2">¿Anular Pago?</h3>
+                                <p className="text-sm text-slate-400 font-bold mb-6">El monto de <span className="text-slate-800">${deletePaymentConfirm.amount.toLocaleString()}</span> se devolverá a la deuda y se ajustarán las cuotas.</p>
+                                <div className="flex gap-3">
+                                    <button onClick={() => setDeletePaymentConfirm(null)} className="flex-1 py-3 bg-slate-100 rounded-xl font-black text-sm">Cancelar</button>
+                                    <button onClick={deletePayment} className="flex-1 py-3 bg-red-500 text-white rounded-xl font-black text-sm">Anular</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {view === 'login' && (
                         <div className="p-10 flex flex-col items-center justify-center h-screen animate-in bg-white">
                             <LogoSVG className="w-24 h-24 mb-8" color="#4f46e5" />
@@ -395,8 +556,40 @@
                             <form onSubmit={(e) => { e.preventDefault(); auth.signInWithEmailAndPassword(e.target.email.value, e.target.pass.value); }} className="w-full space-y-4">
                                 <input name="email" type="email" placeholder="Email" className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-sm outline-none" required />
                                 <input name="pass" type="password" placeholder="Contraseña" className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-sm outline-none" required />
-                                <button className="w-full bg-indigo-600 text-white p-4 rounded-2xl font-black shadow-lg">Entrar</button>
+                                <button className="w-full bg-indigo-600 text-white p-4 rounded-2xl font-black shadow-lg">Iniciar Sesión</button>
                             </form>
+                            <div className="mt-8 flex flex-col items-center gap-3 w-full border-t border-slate-100 pt-6">
+                                <p className="text-xs text-slate-400 font-bold">¿Aún no tienes cuenta?</p>
+                                <button onClick={() => setView('register')} className="w-full bg-slate-50 border border-slate-200 text-indigo-600 p-4 rounded-2xl font-black flex items-center justify-center gap-2 hover:bg-slate-100 transition-colors">
+                                    <Icon name="user-plus" size={18} /> Crear Usuario / Registrar Cartera
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {view === 'register' && (
+                        <div className="p-10 flex flex-col items-center justify-center h-screen animate-in bg-white">
+                            <LogoSVG className="w-16 h-16 mb-6" color="#4f46e5" />
+                            <h1 className="heading-font text-2xl font-black mb-8 text-slate-800 text-center leading-tight">Crea tu Cartera <br/>Connect</h1>
+                            <form onSubmit={async (e) => { 
+                                e.preventDefault(); 
+                                try {
+                                    const cred = await auth.createUserWithEmailAndPassword(e.target.email.value, e.target.pass.value); 
+                                    await db.collection('users').doc(cred.user.uid).set({
+                                        phone: e.target.phone.value,
+                                        smsAuto: false,
+                                        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                                    });
+                                } catch (error) {
+                                    showNotify("Error: " + error.message);
+                                }
+                            }} className="w-full space-y-4">
+                                <input name="email" type="email" placeholder="Tu Email Principal" className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-sm outline-none" required />
+                                <input name="phone" type="tel" placeholder="Tu Teléfono o WhatsApp" className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-sm outline-none" required />
+                                <input name="pass" type="password" placeholder="Contraseña Segura" className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-sm outline-none" required />
+                                <button className="w-full bg-indigo-600 text-white p-4 rounded-2xl font-black shadow-lg">Comenzar a Gestionar</button>
+                            </form>
+                            <button onClick={() => setView('login')} className="mt-6 text-indigo-600 font-bold text-sm">Ya tengo una cuenta</button>
                         </div>
                     )}
 
@@ -409,8 +602,8 @@
                                         <h2 className="heading-font text-xl font-black text-slate-800 tracking-tighter">Connect Préstamos</h2>
                                     </div>
                                     <div className="flex gap-2">
-                                        <button onClick={() => setView('portfolio')} className="p-3 bg-slate-50 rounded-2xl text-slate-400"><Icon name="users" size={20}/></button>
-                                        <button onClick={() => auth.signOut()} className="p-3 bg-slate-50 rounded-2xl text-slate-400"><Icon name="log-out" size={20}/></button>
+                                        <button onClick={() => setView('portfolio')} className="p-3 bg-slate-50 rounded-2xl text-slate-400 hover:text-indigo-600 transition-colors"><Icon name="users" size={20}/></button>
+                                        <button onClick={() => setView('settings')} className="p-3 bg-slate-50 rounded-2xl text-slate-400 hover:text-indigo-600 transition-colors"><Icon name="settings" size={20}/></button>
                                     </div>
                                 </div>
                                 <div className="space-y-3">
@@ -439,7 +632,7 @@
                             <main className="p-6 space-y-8">
                                 {dueToday.length > 0 && (
                                     <div className="space-y-4">
-                                        <h4 className="heading-font text-[11px] font-black uppercase text-slate-500 tracking-widest px-2">Cobros para hoy</h4>
+                                        <h4 className="heading-font text-[11px] font-black uppercase text-slate-500 tracking-widest px-2 flex items-center gap-2"><Icon name="bell" size={14}/> Cobros para hoy</h4>
                                         <div className="flex gap-4 overflow-x-auto no-scrollbar pb-2">
                                             {dueToday.map(c => (
                                                 <div key={c.id} onClick={() => { setSelectedClientId(c.id); setView('profile'); }} className="min-w-[150px] p-5 bg-amber-50 border border-amber-100 rounded-[2rem] flex flex-col items-center text-center shadow-sm cursor-pointer hover:bg-amber-100 transition-colors">
@@ -470,6 +663,9 @@
                                                 </div>
                                             </div>
                                         ))}
+                                        {filteredClients.length === 0 && (
+                                            <p className="text-center text-[10px] font-black uppercase text-slate-300 py-10 tracking-widest">No hay resultados</p>
+                                        )}
                                     </div>
                                 </div>
                             </main>
@@ -477,12 +673,70 @@
                         </div>
                     )}
 
+                    {view === 'settings' && (
+                        <div className="animate-in bg-white min-h-screen">
+                            <header className="p-6 border-b flex items-center justify-between sticky top-0 bg-white z-20 shadow-sm">
+                                <div className="flex items-center gap-3">
+                                    <button onClick={() => setView('dashboard')} className="p-3 text-slate-400 hover:bg-slate-50 rounded-2xl"><Icon name="arrow-left"/></button>
+                                    <h2 className="heading-font text-xl font-black text-slate-800 tracking-tighter">Ajustes Generales</h2>
+                                </div>
+                                <button onClick={() => auth.signOut()} className="p-3 text-red-500 bg-red-50 rounded-2xl font-black text-xs flex items-center gap-2"><Icon name="log-out" size={16}/> Salir</button>
+                            </header>
+                            <main className="p-6 space-y-8">
+                                <div className="space-y-4">
+                                    <div className="flex items-center gap-3 px-2">
+                                        <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center"><Icon name="mail" size={20}/></div>
+                                        <h4 className="font-black text-sm uppercase tracking-widest text-slate-400">Modificar Correo</h4>
+                                    </div>
+                                    <form onSubmit={handleUpdateEmail} className="bg-slate-50 p-6 rounded-[2.5rem] border border-slate-100 space-y-4">
+                                        <p className="text-xs font-bold text-slate-500">Actual: {user?.email}</p>
+                                        <input name="email" type="email" placeholder="Nuevo correo electrónico" className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold text-sm outline-none focus:border-indigo-500" required />
+                                        <button className="w-full bg-indigo-600 text-white p-4 rounded-2xl font-black shadow-lg">Actualizar Correo</button>
+                                    </form>
+                                </div>
+
+                                <div className="space-y-4">
+                                    <div className="flex items-center gap-3 px-2">
+                                        <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center"><Icon name="lock" size={20}/></div>
+                                        <h4 className="font-black text-sm uppercase tracking-widest text-slate-400">Modificar Contraseña</h4>
+                                    </div>
+                                    <form onSubmit={handleUpdatePassword} className="bg-slate-50 p-6 rounded-[2.5rem] border border-slate-100 space-y-4">
+                                        <input name="password" type="password" placeholder="Nueva contraseña (mín 6 caracteres)" minLength="6" className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold text-sm outline-none focus:border-indigo-500" required />
+                                        <button className="w-full bg-slate-800 text-white p-4 rounded-2xl font-black shadow-lg">Cambiar Contraseña</button>
+                                    </form>
+                                </div>
+
+                                <div className="space-y-4">
+                                    <div className="flex items-center gap-3 px-2">
+                                        <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center"><Icon name="shield" size={20}/></div>
+                                        <h4 className="font-black text-sm uppercase tracking-widest text-slate-400">Preferencias Pro</h4>
+                                    </div>
+                                    <div className="bg-slate-50 p-6 rounded-[2.5rem] border border-slate-100 space-y-4">
+                                        <div className="flex justify-between items-center pt-2 pb-2">
+                                            <span className="font-bold text-slate-700 text-sm">Modo Oscuro (Próximamente)</span>
+                                            <div className="w-12 h-6 bg-slate-300 rounded-full relative cursor-pointer"><div className="w-4 h-4 bg-white rounded-full absolute left-1 top-1"></div></div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="space-y-4 pt-4 border-t border-slate-100">
+                                    <div className="bg-slate-50 p-6 rounded-[2.5rem] border border-slate-100 text-center">
+                                        <LogoSVG className="w-12 h-12 mx-auto mb-2 opacity-50" color="#64748b" />
+                                        <p className="font-black text-sm text-slate-600">Connect Préstamos Pro</p>
+                                        <p className="text-xs font-bold text-slate-400 mt-1">Versión 2.5.0 Cloud</p>
+                                        <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest mt-4">Gestión Segura con Firebase</p>
+                                    </div>
+                                </div>
+                            </main>
+                        </div>
+                    )}
+
                     {view === 'ganancias' && (
                         <div className="animate-in bg-white min-h-screen">
-                            <header className="p-6 border-b flex items-center justify-between sticky top-0 bg-white z-20 no-print">
+                            <header className="p-6 border-b flex items-center justify-between sticky top-0 bg-white z-20 no-print shadow-sm">
                                 <div className="flex items-center gap-3">
                                     <button onClick={() => setView('dashboard')} className="p-3 text-slate-400"><Icon name="arrow-left"/></button>
-                                    <h2 className="text-xl font-black text-slate-800">Estado de Cuenta</h2>
+                                    <h2 className="heading-font text-xl font-black text-slate-800">Estado de Cuenta</h2>
                                 </div>
                                 <div className="flex gap-2">
                                     <button onClick={downloadCSV} className="p-3 bg-slate-50 rounded-2xl"><Icon name="download" size={20}/></button>
@@ -496,7 +750,10 @@
                                             <button key={f} onClick={() => setEarningsFilter(f)} className={`px-5 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${earningsFilter === f ? 'bg-indigo-600 text-white shadow-lg' : 'bg-slate-50 text-slate-400'}`}>{f}</button>
                                         ))}
                                     </div>
-                                    <input type="text" placeholder="Filtrar por nombre..." className="w-full p-4 bg-slate-50 border rounded-2xl font-bold text-xs" value={earningsSearch} onChange={e => setEarningsSearch(e.target.value)} />
+                                    <div className="relative">
+                                        <Icon name="search" className="absolute left-4 top-4 text-slate-300" size={16} />
+                                        <input type="text" placeholder="Filtrar por nombre..." className="w-full pl-11 p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-xs outline-none focus:border-indigo-500" value={earningsSearch} onChange={e => setEarningsSearch(e.target.value)} />
+                                    </div>
                                 </div>
                                 <div className="space-y-4">
                                     {filteredGains.map(g => (
@@ -513,6 +770,7 @@
                                             </div>
                                         </div>
                                     ))}
+                                    {filteredGains.length === 0 && <p className="text-center text-[10px] font-black uppercase text-slate-300 py-10 tracking-widest">Sin resultados</p>}
                                 </div>
                             </main>
                         </div>
@@ -522,21 +780,38 @@
                         <div className="animate-in bg-white min-h-screen">
                             <header className="p-6 border-b flex items-center gap-4 sticky top-0 bg-white z-10 shadow-sm">
                                 <button onClick={() => setView('dashboard')} className="p-3 text-slate-400"><Icon name="arrow-left"/></button>
-                                <h2 className="text-xl font-black text-slate-800">Cartera Completa</h2>
+                                <h2 className="heading-font text-xl font-black text-slate-800">Cartera Completa</h2>
                             </header>
-                            <main className="p-6 space-y-4">
-                                {clients.map(c => (
-                                    <div key={c.id} className="p-5 bg-slate-50 border border-slate-100 rounded-[2rem] flex justify-between items-center">
+                            
+                            {/* Buscador y Categorías de Cartera Integradas */}
+                            <div className="px-6 pt-6 space-y-4">
+                                <div className="relative">
+                                    <Icon name="search" className="absolute left-4 top-4 text-slate-300" size={18} />
+                                    <input type="text" placeholder="Buscar en la cartera..." className="w-full pl-12 p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-xs outline-none focus:border-indigo-500" value={portfolioSearch} onChange={e => setPortfolioSearch(e.target.value)} />
+                                </div>
+                                <div className="flex gap-2 overflow-x-auto no-scrollbar pb-2">
+                                    {[{id:'all', label:'Todos'}, {id:'active', label:'Con Préstamo Activo'}, {id:'inactive', label:'Sin Préstamo'}].map(f => (
+                                        <button key={f.id} onClick={() => setPortfolioFilter(f.id)} className={`px-5 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${portfolioFilter === f.id ? 'bg-indigo-600 text-white shadow-lg' : 'bg-slate-50 text-slate-400 border border-slate-100 hover:bg-slate-100'}`}>{f.label}</button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <main className="p-6 pt-2 space-y-4">
+                                {portfolioFilteredClients.map(c => (
+                                    <div key={c.id} className="p-5 bg-slate-50 border border-slate-100 rounded-[2rem] flex justify-between items-center transition-transform hover:scale-[1.02]">
                                         <div className="flex gap-4 items-center">
-                                            <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center font-black text-indigo-600 border border-slate-200">{c.name[0]}</div>
-                                            <div><p className="font-black text-slate-800 text-sm leading-none mb-1">{c.name}</p><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{c.phone}</p></div>
+                                            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-black border ${c.loan && c.totalDebt > 0 ? 'bg-indigo-50 text-indigo-600 border-indigo-100' : 'bg-white text-slate-400 border-slate-200'}`}>{c.name[0]}</div>
+                                            <div>
+                                                <p className="font-black text-slate-800 text-sm leading-none mb-1">{c.name}</p>
+                                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{c.phone}</p>
+                                            </div>
                                         </div>
                                         <div className="flex gap-2">
-                                            <button onClick={() => { setSelectedClientId(c.id); setView('profile'); }} className="p-3 bg-white text-indigo-600 rounded-xl border active:scale-90"><Icon name="search" size={16}/></button>
-                                            <button onClick={() => setDeleteConfirm(c.id)} className="p-3 bg-white text-red-500 rounded-xl border active:scale-90"><Icon name="trash-2" size={16}/></button>
+                                            <button onClick={() => { setSelectedClientId(c.id); setView('profile'); }} className="p-3 bg-white text-indigo-600 rounded-xl border border-slate-100 active:scale-90 transition-transform"><Icon name="search" size={16}/></button>
                                         </div>
                                     </div>
                                 ))}
+                                {portfolioFilteredClients.length === 0 && <p className="text-center text-[10px] font-black uppercase text-slate-300 py-10 tracking-widest">Sin resultados en esta categoría</p>}
                             </main>
                         </div>
                     )}
@@ -556,23 +831,24 @@
                                     <h3 className="heading-font text-2xl font-black text-slate-800 leading-tight">{selectedClient.name}</h3>
                                     <p className="text-xs font-bold text-slate-400 uppercase mt-2">ID: {selectedClient.cedula || 'N/A'}</p>
                                     <div className="grid grid-cols-2 gap-4 w-full mt-8">
-                                        <div className="bg-slate-50 p-5 rounded-[2rem] border border-slate-100 text-center"><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Saldo Total</p><p className={`text-xl font-black ${selectedClient.totalDebt > 0.05 ? 'text-red-500' : 'text-emerald-500'}`}>${selectedClient.totalDebt.toLocaleString()}</p></div>
-                                        <div className="bg-slate-50 p-5 rounded-[2rem] border border-slate-100 text-center"><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Cuotas</p><p className="text-xl font-black text-indigo-600">{selectedClient.loan ? `${selectedClient.loan.paidInstallments}/${selectedClient.loan.totalInstallments}` : '0/0'}</p></div>
+                                        <div className="bg-slate-50 p-5 rounded-[2rem] border border-slate-100 text-center"><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Saldo Restante</p><p className={`text-xl font-black ${selectedClient.totalDebt > 0.05 ? 'text-red-500' : 'text-emerald-500'}`}>${selectedClient.totalDebt.toLocaleString()}</p></div>
+                                        <div className="bg-slate-50 p-5 rounded-[2rem] border border-slate-100 text-center"><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Cuotas Pagadas</p><p className="text-xl font-black text-indigo-600">{selectedClient.loan ? `${selectedClient.loan.paidInstallments}/${selectedClient.loan.totalInstallments}` : '0/0'}</p></div>
                                     </div>
                                     {selectedClient.loan && (
                                         <div className="w-full mt-6 p-4 bg-indigo-50/50 rounded-2xl border border-indigo-100 flex justify-between items-center text-left">
                                             <div><p className="text-[9px] font-black text-indigo-400 uppercase">Próximo Cobro</p><p className="text-sm font-black text-indigo-700">{selectedClient.loan.nextPaymentDate || '...'}</p></div>
-                                            <div className="text-right"><p className="text-[9px] font-black text-indigo-400 uppercase">Monto Hoy</p><p className="text-sm font-black text-indigo-700">${(selectedClient.loan.installmentAmount - (selectedClient.loan.partialCredit || 0)).toLocaleString()}</p></div>
+                                            <div className="text-right"><p className="text-[9px] font-black text-indigo-400 uppercase">Monto a Pagar</p><p className="text-sm font-black text-indigo-700">${(selectedClient.loan.installmentAmount - (selectedClient.loan.partialCredit || 0)).toLocaleString()}</p></div>
                                         </div>
                                     )}
                                     <div className="w-full mt-8 flex gap-3">
                                         {(selectedClient.totalDebt > 0.1) ? (
                                             <>
-                                                <button onClick={() => window.open(`https://wa.me/${selectedClient.phone.replace(/\D/g,'')}?text=Recordatorio: $${(selectedClient.loan.installmentAmount - (selectedClient.loan.partialCredit || 0)).toLocaleString()} para el ${selectedClient.loan.nextPaymentDate}`)} className="p-5 bg-emerald-500 text-white rounded-[1.8rem] flex items-center justify-center"><Icon name="send" size={24} /></button>
-                                                <button onClick={() => setIsTransacting(true)} className="py-5 px-8 bg-indigo-600 text-white rounded-[1.8rem] font-black text-sm uppercase flex-[2]">Cobrar Cuota</button>
+                                                {/* Botón de Recordatorio (Métricas en foto) */}
+                                                <button onClick={() => setReminderClient(selectedClient)} className="p-5 bg-emerald-500 text-white rounded-[1.8rem] flex items-center justify-center active:scale-95 transition-transform"><Icon name="send" size={24} /></button>
+                                                <button onClick={() => setIsTransacting(true)} className="py-5 px-8 bg-indigo-600 text-white rounded-[1.8rem] font-black text-sm uppercase tracking-widest flex-[2] active:scale-95 transition-transform">Cobrar Cuota</button>
                                             </>
                                         ) : (
-                                            <button onClick={() => setView('assign_loan')} className="w-full py-5 bg-indigo-600 text-white rounded-[1.8rem] font-black flex items-center justify-center gap-3"><Icon name="trending-up" size={20} /> Asignar Nuevo Préstamo</button>
+                                            <button onClick={() => setView('assign_loan')} className="w-full py-5 bg-indigo-600 text-white rounded-[1.8rem] font-black flex items-center justify-center gap-3 active:scale-95 transition-transform"><Icon name="trending-up" size={20} /> Asignar Nuevo Préstamo</button>
                                         )}
                                     </div>
                                 </div>
@@ -582,7 +858,11 @@
                                         {selectedClient.history?.map(h => (
                                             <div key={h.id} className="p-5 bg-white border border-slate-100 rounded-[1.8rem] flex justify-between items-center shadow-sm">
                                                 <div className="flex items-center gap-4"><div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center border border-emerald-100"><Icon name="check-circle-2" size={22}/></div><div><p className="font-bold text-slate-800 text-sm leading-none">{h.description}</p><p className="text-[10px] text-slate-400 mt-1 uppercase font-black">{h.date}</p></div></div>
-                                                <div className="flex items-center gap-2"><p className="font-black text-emerald-500 text-lg">${h.amount.toLocaleString()}</p><button onClick={() => setReceiptData({client: selectedClient, transaction: h})} className="p-2 text-slate-300 hover:text-indigo-500 transition-colors"><Icon name="share-2" size={16}/></button></div>
+                                                <div className="flex items-center gap-2">
+                                                    <p className="font-black text-emerald-500 text-lg mr-2">${h.amount.toLocaleString()}</p>
+                                                    <button onClick={() => setReceiptData({client: selectedClient, transaction: h})} className="p-2 bg-slate-50 text-slate-400 rounded-xl hover:text-indigo-600 hover:bg-indigo-50 transition-colors"><Icon name="share-2" size={16}/></button>
+                                                    <button onClick={() => setDeletePaymentConfirm(h)} className="p-2 bg-slate-50 text-slate-400 rounded-xl hover:text-red-500 hover:bg-red-50 transition-colors"><Icon name="trash-2" size={16}/></button>
+                                                </div>
                                             </div>
                                         ))}
                                     </div>
@@ -595,11 +875,12 @@
                         <div className="animate-in bg-white min-h-screen">
                             <header className="p-6 border-b flex items-center gap-4 bg-white sticky top-0 z-10 shadow-sm"><button onClick={() => setView('profile')} className="p-3 text-slate-400"><Icon name="arrow-left"/></button><h2 className="heading-font text-xl font-black text-slate-800">Editar Cliente</h2></header>
                             <form onSubmit={updateClient} className="p-8 space-y-5">
-                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase">Nombre</label><input name="name" type="text" defaultValue={selectedClient.name} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold" required /></div>
-                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase">Cédula</label><input name="cedula" type="text" defaultValue={selectedClient.cedula} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold" /></div>
-                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase">WhatsApp</label><input name="phone" type="tel" defaultValue={selectedClient.phone} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold" required /></div>
-                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase">Dirección</label><textarea name="address" rows="3" defaultValue={selectedClient.address} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold resize-none" /></div>
-                                <button className="w-full bg-indigo-600 text-white p-5 rounded-[2.2rem] font-black shadow-xl mt-4">Guardar Cambios</button>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Nombre</label><input name="name" type="text" defaultValue={selectedClient.name} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold focus:border-indigo-500 outline-none" required /></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Cédula / ID</label><input name="cedula" type="text" defaultValue={selectedClient.cedula} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold focus:border-indigo-500 outline-none" /></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">WhatsApp / Teléfono</label><input name="phone" type="tel" defaultValue={selectedClient.phone} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold focus:border-indigo-500 outline-none" required /></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Correo Electrónico</label><input name="email" type="email" defaultValue={selectedClient.email} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold focus:border-indigo-500 outline-none" /></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Dirección</label><textarea name="address" rows="3" defaultValue={selectedClient.address} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold resize-none focus:border-indigo-500 outline-none" /></div>
+                                <button className="w-full bg-indigo-600 text-white p-5 rounded-[2.2rem] font-black shadow-xl mt-4 active:scale-95 transition-all">Guardar Cambios</button>
                             </form>
                         </div>
                     )}
@@ -609,20 +890,71 @@
                             <div className="bg-white w-full max-w-md rounded-t-[2.5rem] sm:rounded-[2.5rem] p-8 shadow-2xl animate-in">
                                 <div className="flex justify-between items-center mb-6"><h3 className="heading-font text-xl font-black text-slate-800">Registrar Pago</h3><button onClick={() => setIsTransacting(false)} className="text-slate-400 p-2"><Icon name="x" /></button></div>
                                 <div className="space-y-6">
-                                    <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100 flex justify-between items-center"><div><p className="text-[10px] font-black text-slate-400 uppercase mb-1">Cuota Base</p><p className="text-xl font-black text-slate-700">${selectedClient.loan?.installmentAmount.toLocaleString()}</p></div><div className="text-right"><p className="text-[10px] font-black text-indigo-400 uppercase mb-1">Abono previo</p><p className="text-xl font-black text-indigo-600">-${(selectedClient.loan?.partialCredit || 0).toLocaleString()}</p></div></div>
-                                    <div className="space-y-2 text-center"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Recibido</label><input id="inputAmount" type="number" defaultValue={selectedClient.loan?.installmentAmount - (selectedClient.loan?.partialCredit || 0)} className="w-full p-5 bg-slate-50 border rounded-2xl font-black text-center text-3xl focus:border-indigo-500 outline-none text-indigo-600" /></div>
-                                    <button onClick={() => recordTransaction(selectedClientId, document.getElementById('inputAmount').value)} className="w-full bg-emerald-500 text-white p-5 rounded-[2rem] font-black text-lg shadow-xl active:scale-95 transition-all">Confirmar en Nube</button>
+                                    <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100 flex justify-between items-center"><div><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Cuota Base</p><p className="text-xl font-black text-slate-700">${selectedClient.loan?.installmentAmount.toLocaleString()}</p></div><div className="text-right"><p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-1">Abono previo</p><p className="text-xl font-black text-indigo-600">-${(selectedClient.loan?.partialCredit || 0).toLocaleString()}</p></div></div>
+                                    
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="space-y-2 text-center">
+                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Fecha Pago</label>
+                                            <input id="inputDate" type="date" defaultValue={new Date().toISOString().split('T')[0]} className="w-full p-4 bg-slate-50 border rounded-2xl font-black text-center focus:border-indigo-500 outline-none text-slate-700 text-xs" />
+                                        </div>
+                                        <div className="space-y-2 text-center">
+                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Recibido</label>
+                                            <input id="inputAmount" type="number" defaultValue={selectedClient.loan?.installmentAmount - (selectedClient.loan?.partialCredit || 0)} className="w-full p-4 bg-slate-50 border rounded-2xl font-black text-center text-xl focus:border-indigo-500 outline-none text-indigo-600" />
+                                        </div>
+                                    </div>
+                                    <p className="text-[9px] text-slate-400 font-bold uppercase tracking-tighter text-center">El excedente se abonará a la próxima cuota</p>
+                                    
+                                    <button onClick={() => recordTransaction(selectedClientId, document.getElementById('inputAmount').value, document.getElementById('inputDate').value)} className="w-full bg-emerald-500 text-white p-5 rounded-[2rem] font-black text-lg shadow-xl active:scale-95 transition-all">Confirmar en Nube</button>
                                 </div>
                             </div>
                         </div>
                     )}
 
+                    {/* TARJETA DE RECORDATORIO DE PAGO EN FOTO */}
+                    {reminderClient && reminderClient.loan && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[200] flex items-center justify-center p-4">
+                            <div className="bg-white w-full max-w-sm rounded-[2.5rem] shadow-2xl overflow-hidden animate-in">
+                                <div ref={reminderRef} className="p-8 bg-white text-slate-800 relative">
+                                    <div className="absolute top-0 left-0 w-full h-2 bg-emerald-500"></div>
+                                    <div className="text-center mb-6 mt-2">
+                                        <LogoSVG className="w-16 h-16 mx-auto mb-2" color="#4f46e5" />
+                                        <h4 className="heading-font text-xl font-black text-slate-900">Connect Préstamos</h4>
+                                        <p className="text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em] mb-2">Recordatorio de Pago</p>
+                                    </div>
+                                    <div className="bg-slate-50 p-4 rounded-[1.5rem] border border-slate-100 text-center mb-6">
+                                        <p className="font-black text-slate-800 text-lg">{reminderClient.name}</p>
+                                        <p className="text-[10px] font-black text-slate-400 uppercase mt-1">ID: {reminderClient.cedula || 'N/A'} • {reminderClient.phone}</p>
+                                        {reminderClient.email && <p className="text-[10px] font-bold text-slate-400 mt-1">{reminderClient.email}</p>}
+                                    </div>
+                                    <div className="space-y-4 border-b border-slate-100 pb-6 mb-6">
+                                        <div className="flex justify-between text-sm"><span className="text-slate-400 font-bold">Cuotas Pagadas</span><span className="font-black text-emerald-600">{reminderClient.loan.paidInstallments}</span></div>
+                                        <div className="flex justify-between text-sm"><span className="text-slate-400 font-bold">Cuotas Faltantes</span><span className="font-black text-amber-500">{reminderClient.loan.totalInstallments - reminderClient.loan.paidInstallments}</span></div>
+                                        <div className="flex justify-between text-sm"><span className="text-slate-400 font-bold">Total Abonado</span><span className="font-black text-slate-800">${((reminderClient.loan.paidInstallments * reminderClient.loan.installmentAmount) + (reminderClient.loan.partialCredit || 0)).toLocaleString()}</span></div>
+                                        <div className="flex justify-between text-sm pt-2 border-t border-dashed border-slate-200"><span className="text-slate-400 font-bold">Monto Restante</span><span className="font-black text-red-500">${reminderClient.totalDebt.toLocaleString()}</span></div>
+                                    </div>
+                                    <div className="bg-indigo-50 p-4 rounded-[1.5rem] border border-indigo-100 flex justify-between items-center text-left">
+                                        <div><p className="text-[9px] font-black text-indigo-400 uppercase">Próximo Cobro</p><p className="text-sm font-black text-indigo-700">{reminderClient.loan.nextPaymentDate}</p></div>
+                                        <div className="text-right"><p className="text-[9px] font-black text-indigo-400 uppercase">Monto a Pagar</p><p className="text-lg font-black text-emerald-600">${(reminderClient.loan.installmentAmount - (reminderClient.loan.partialCredit || 0)).toLocaleString()}</p></div>
+                                    </div>
+                                </div>
+                                <div className="p-4 bg-slate-50 flex gap-2">
+                                    <button onClick={() => handleShare(reminderRef, `Recordatorio_${reminderClient.name.replace(/\s+/g, '_')}`, 'Recordatorio de Pago')} disabled={isGeneratingImage} className="flex-1 bg-emerald-500 text-white py-4 rounded-2xl font-black flex items-center justify-center gap-2 active:scale-95 shadow-lg shadow-emerald-100">
+                                        {isGeneratingImage ? <span className="animate-pulse">...</span> : <><Icon name="send" size={18}/> Enviar Foto</>}
+                                    </button>
+                                    <button onClick={() => setReminderClient(null)} className="p-4 bg-slate-200 text-slate-600 rounded-2xl active:scale-95"><Icon name="x"/></button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* TARJETA DE RECIBO */}
                     {receiptData && (
                         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[200] flex items-center justify-center p-4">
                             <div className="bg-white w-full max-w-sm rounded-[2.5rem] shadow-2xl overflow-hidden animate-in">
-                                <div ref={receiptRef} className="p-8 bg-white text-slate-800">
-                                    <div className="text-center mb-6">
-                                        <LogoSVG className="w-20 h-20 mx-auto mb-2" color="#4f46e5" />
+                                <div ref={receiptRef} className="p-8 bg-white text-slate-800 relative">
+                                    <div className="absolute top-0 left-0 w-full h-2 bg-indigo-600"></div>
+                                    <div className="text-center mb-6 mt-2">
+                                        <LogoSVG className="w-16 h-16 mx-auto mb-2" color="#4f46e5" />
                                         <h4 className="heading-font text-xl font-black text-slate-900">Connect Préstamos</h4>
                                         <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-4">Comprobante de Pago</p>
                                         <p className="text-[10px] font-black text-indigo-500 uppercase tracking-widest">{receiptData.transaction.ref}</p>
@@ -632,13 +964,15 @@
                                         <div className="flex justify-between text-sm"><span className="text-slate-400 font-bold">Cuota Pagada</span><span className="font-black text-indigo-600">{receiptData.transaction.installmentStatus}</span></div>
                                         <div className="flex justify-between text-sm"><span className="text-slate-400 font-bold">Restantes</span><span className="font-black text-slate-600">{receiptData.transaction.remainingInstallments}</span></div>
                                         <div className="pt-2 flex justify-between text-sm"><span className="text-slate-400 font-bold">Monto Recibido</span><span className="font-black text-emerald-500 text-lg">${receiptData.transaction.amount.toLocaleString()}</span></div>
-                                        {receiptData.surplus > 0 && <div className="bg-indigo-50 p-3 rounded-xl border border-indigo-100 flex justify-between items-center"><span className="text-[10px] font-black text-indigo-600 uppercase">Abono Próx. Cuota</span><span className="font-black text-indigo-600 text-sm">${receiptData.surplus.toLocaleString()}</span></div>}
-                                        <div className="flex justify-between text-sm pt-2 border-t border-dashed"><span className="text-slate-400 font-bold">Saldo Pendiente</span><span className="font-black text-red-500">${receiptData.client.totalDebt.toLocaleString()}</span></div>
+                                        {receiptData.surplus > 0 && <div className="bg-indigo-50 p-3 rounded-xl border border-indigo-100 flex justify-between items-center"><span className="text-[10px] font-black text-indigo-600 uppercase tracking-widest">Abono Próx. Cuota</span><span className="font-black text-indigo-600 text-sm">${receiptData.surplus.toLocaleString()}</span></div>}
+                                        <div className="flex justify-between text-sm pt-2 border-t border-dashed border-slate-200"><span className="text-slate-400 font-bold">Saldo Pendiente</span><span className="font-black text-red-500">${receiptData.client.totalDebt.toLocaleString()}</span></div>
                                     </div>
                                     <div className="text-center text-[9px] text-slate-400 font-bold uppercase tracking-widest">{receiptData.transaction.date}</div>
                                 </div>
                                 <div className="p-4 bg-slate-50 flex gap-2">
-                                    <button onClick={handleShare} disabled={isGeneratingImage} className="flex-1 bg-indigo-600 text-white py-4 rounded-2xl font-black flex items-center justify-center gap-2 active:scale-95 shadow-lg">{isGeneratingImage ? <span className="animate-pulse">...</span> : <><Icon name="share-2" size={18}/> Compartir Ticket</>}</button>
+                                    <button onClick={() => handleShare(receiptRef, `Recibo_${receiptData.transaction.ref}`, 'Recibo de Pago')} disabled={isGeneratingImage} className="flex-1 bg-indigo-600 text-white py-4 rounded-2xl font-black flex items-center justify-center gap-2 active:scale-95 shadow-lg shadow-indigo-100">
+                                        {isGeneratingImage ? <span className="animate-pulse">...</span> : <><Icon name="share-2" size={18}/> Compartir Ticket</>}
+                                    </button>
                                     <button onClick={() => setReceiptData(null)} className="p-4 bg-slate-200 text-slate-600 rounded-2xl active:scale-95"><Icon name="x"/></button>
                                 </div>
                             </div>
@@ -648,12 +982,13 @@
                     {view === 'add_client' && (
                         <div className="animate-in bg-white min-h-screen">
                             <header className="p-6 border-b flex items-center gap-4 bg-white sticky top-0 z-10 shadow-sm"><button onClick={() => setView('dashboard')} className="p-3 text-slate-400"><Icon name="arrow-left"/></button><h2 className="heading-font text-xl font-black text-slate-800">Nuevo Cliente</h2></header>
-                            <form onSubmit={(e) => { e.preventDefault(); const data = { name: e.target.name.value, cedula: e.target.cedula.value, phone: e.target.phone.value, address: e.target.address.value, totalDebt: 0, history: [], loan: null, createdAt: firebase.firestore.FieldValue.serverTimestamp() }; db.collection('users').doc(user.uid).collection('clients').add(data); setView('dashboard'); showNotify("Registrado correctamente"); }} className="p-8 space-y-5">
-                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Nombre Completo</label><input name="name" type="text" placeholder="Ej: Juan Pérez" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500" required /></div>
-                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Cédula / ID</label><input name="cedula" type="text" placeholder="ID del cliente" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500" /></div>
-                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">WhatsApp / Teléfono</label><input name="phone" type="tel" placeholder="8090000000" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500" required /></div>
-                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Dirección de Cobro</label><textarea name="address" rows="3" placeholder="Ubicación..." className="w-full p-4 bg-slate-50 border rounded-2xl font-bold resize-none outline-none focus:border-indigo-500" /></div>
-                                <button className="w-full bg-indigo-600 text-white p-5 rounded-[2.2rem] font-black shadow-xl mt-4">Registrar en Nube</button>
+                            <form onSubmit={(e) => { e.preventDefault(); const data = { name: e.target.name.value, cedula: e.target.cedula.value, phone: e.target.phone.value, email: e.target.email.value, address: e.target.address.value, totalDebt: 0, history: [], loan: null, createdAt: firebase.firestore.FieldValue.serverTimestamp() }; db.collection('users').doc(user.uid).collection('clients').add(data); setView('dashboard'); showNotify("Registrado correctamente"); }} className="p-8 space-y-5">
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Nombre Completo</label><input name="name" type="text" placeholder="Ej: Juan Pérez" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500" required /></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Cédula / ID</label><input name="cedula" type="text" placeholder="ID del cliente" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500" /></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">WhatsApp / Teléfono</label><input name="phone" type="tel" placeholder="8090000000" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500" required /></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Correo Electrónico</label><input name="email" type="email" placeholder="cliente@correo.com" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500" /></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Dirección de Cobro</label><textarea name="address" rows="3" placeholder="Ubicación..." className="w-full p-4 bg-slate-50 border rounded-2xl font-bold resize-none outline-none focus:border-indigo-500" /></div>
+                                <button className="w-full bg-indigo-600 text-white p-5 rounded-[2.2rem] font-black shadow-xl mt-4 uppercase tracking-widest text-sm active:scale-95 transition-all">Registrar en Nube</button>
                             </form>
                         </div>
                     )}
@@ -662,13 +997,13 @@
                         <div className="animate-in bg-white min-h-screen">
                             <header className="p-6 border-b flex items-center gap-4 sticky top-0 bg-white shadow-sm z-10"><button onClick={() => setView('profile')} className="p-3 text-slate-400"><Icon name="arrow-left"/></button><h2 className="heading-font text-xl font-black text-slate-800 tracking-tighter">Nuevo Préstamo</h2></header>
                             <form onSubmit={assignLoan} className="p-8 space-y-6">
-                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase ml-2 tracking-widest">Monto a Prestar</label><input name="amount" type="number" step="any" className="w-full p-5 bg-slate-50 border border-slate-200 rounded-2xl font-black text-center text-3xl outline-none focus:border-indigo-500 text-indigo-600" required /></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Monto a Prestar</label><input name="amount" type="number" step="any" className="w-full p-5 bg-slate-50 border border-slate-200 rounded-2xl font-black text-center text-3xl outline-none focus:border-indigo-500 text-indigo-600" required /></div>
                                 <div className="grid grid-cols-2 gap-4">
-                                    <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase ml-2 tracking-widest">Interés %</label><input name="interest" type="number" defaultValue="20" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold" /></div>
-                                    <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase ml-2 tracking-widest">No. Cuotas</label><input name="inst" type="number" defaultValue="10" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold" /></div>
+                                    <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Interés %</label><input name="interest" type="number" defaultValue="20" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold focus:border-indigo-500 outline-none" /></div>
+                                    <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">No. Cuotas</label><input name="inst" type="number" defaultValue="10" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold focus:border-indigo-500 outline-none" /></div>
                                 </div>
-                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase ml-2 tracking-widest">Frecuencia</label><select name="freq" className="w-full p-4 bg-slate-100 border rounded-2xl font-bold appearance-none cursor-pointer"><option>Semanal</option><option>Diario</option><option>Quincenal</option><option>Mensual</option></select></div>
-                                <button className="w-full bg-indigo-600 text-white p-5 rounded-[2.2rem] font-black shadow-xl mt-6">Activar Préstamo Cloud</button>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Frecuencia</label><select name="freq" className="w-full p-4 bg-slate-100 border rounded-2xl font-bold appearance-none cursor-pointer focus:border-indigo-500 outline-none"><option>Semanal</option><option>Diario</option><option>Quincenal</option><option>Mensual</option></select></div>
+                                <button className="w-full bg-indigo-600 text-white p-5 rounded-[2.2rem] font-black shadow-xl mt-6 uppercase tracking-widest text-sm active:scale-95 transition-all">Activar Préstamo Cloud</button>
                             </form>
                         </div>
                     )}
