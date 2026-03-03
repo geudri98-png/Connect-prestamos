@@ -3,10 +3,10 @@ import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
   onAuthStateChanged, 
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  signOut,
-  updateProfile
+  createUserWithEmailAndPassword, 
+  signInWithEmailAndPassword, 
+  signOut, 
+  updateProfile 
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -15,10 +15,10 @@ import {
   addDoc, 
   updateDoc, 
   deleteDoc, 
-  onSnapshot
+  onSnapshot 
 } from 'firebase/firestore';
 import { 
-  User, // Añadido para corregir ReferenceError
+  User, // Corregido: Importación faltante
   Users, 
   UserPlus, 
   Search, 
@@ -55,7 +55,6 @@ const firebaseConfig = {
   measurementId: "G-5VFZ5ZCBYZ"
 };
 
-// Inicialización de Firebase
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
@@ -95,7 +94,6 @@ const App = () => {
       }));
       setClients(clientsData);
     });
-
     return () => unsubscribe();
   }, [user]);
 
@@ -109,18 +107,14 @@ const App = () => {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       await updateProfile(userCredential.user, { displayName: name });
       showNotification("Cuenta creada correctamente");
-    } catch (error) {
-      showNotification("Error al registrarse", "error");
-    }
+    } catch (error) { showNotification("Error al registrarse", "error"); }
   };
 
   const handleLogin = async (email, password) => {
     try {
       await signInWithEmailAndPassword(auth, email, password);
       showNotification("Acceso concedido");
-    } catch (error) {
-      showNotification("Error de acceso", "error");
-    }
+    } catch (error) { showNotification("Error de acceso", "error"); }
   };
 
   const handleLogout = () => signOut(auth);
@@ -138,9 +132,7 @@ const App = () => {
       });
       setView('dashboard');
       showNotification('Cliente registrado');
-    } catch (error) {
-      showNotification('Error al guardar', 'error');
-    }
+    } catch (error) { showNotification('Error al guardar', 'error'); }
   };
 
   const updateClientData = async (updatedData) => {
@@ -150,9 +142,7 @@ const App = () => {
       await updateDoc(clientDocRef, updatedData);
       setView('profile');
       showNotification('Datos actualizados');
-    } catch (error) {
-      showNotification('Error al actualizar', 'error');
-    }
+    } catch (error) { showNotification('Error al actualizar', 'error'); }
   };
 
   const removeClient = async (id) => {
@@ -164,9 +154,7 @@ const App = () => {
       setSelectedClientId(null);
       setShowDeleteConfirm(false);
       showNotification('Cliente eliminado');
-    } catch (error) {
-      showNotification('Error al eliminar', 'error');
-    }
+    } catch (error) { showNotification('Error al eliminar', 'error'); }
   };
 
   const assignNewLoan = async (clientId, loanDetails) => {
@@ -179,40 +167,25 @@ const App = () => {
       });
       setView('profile');
       showNotification('Préstamo asignado');
-    } catch (error) {
-      showNotification('Error al asignar', 'error');
-    }
+    } catch (error) { showNotification('Error al asignar', 'error'); }
   };
 
   const recordTransaction = async (clientId, type, amount, description) => {
     if (!user) return;
     const client = clients.find(c => c.id === clientId);
     if (!client) return;
-
     const numAmount = parseFloat(amount);
     const date = new Date().toISOString().split('T')[0];
-    
     let newPaidInstallments = client.loan?.paidInstallments || 0;
     let newPartialCredit = client.loan?.partialCredit || 0;
-
     if (type === 'Pago' && client.loan) {
       const totalAvailable = newPartialCredit + numAmount;
       const installmentsCovered = Math.floor(totalAvailable / client.loan.installmentAmount);
       newPartialCredit = totalAvailable % client.loan.installmentAmount;
       newPaidInstallments = Math.min(newPaidInstallments + installmentsCovered, client.loan.totalInstallments);
     }
-
     const newDebt = type === 'Pago' ? client.totalDebt - numAmount : client.totalDebt + numAmount;
-    
-    const newEntry = {
-      id: Date.now().toString(),
-      type,
-      amount: numAmount,
-      date,
-      description: description || (type === 'Pago' ? `Pago Cuota #${newPaidInstallments}` : 'Cargo extra'),
-      ref: 'REC-' + Math.floor(1000 + Math.random() * 8999),
-    };
-
+    const newEntry = { id: Date.now().toString(), type, amount: numAmount, date, description: description || (type === 'Pago' ? `Pago Cuota #${newPaidInstallments}` : 'Cargo extra'), ref: 'REC-' + Math.floor(1000 + Math.random() * 8999) };
     try {
       const clientDocRef = doc(db, 'users', user.uid, 'clients', clientId);
       await updateDoc(clientDocRef, {
@@ -220,13 +193,8 @@ const App = () => {
         loan: client.loan ? { ...client.loan, paidInstallments: newPaidInstallments, partialCredit: newPartialCredit } : null,
         history: [newEntry, ...client.history]
       });
-      setReceiptData({ 
-        client: { ...client, totalDebt: Math.max(0, newDebt), loan: client.loan ? { ...client.loan, paidInstallments: newPaidInstallments } : null }, 
-        transaction: newEntry 
-      });
-    } catch (error) {
-      showNotification('Error al registrar pago', 'error');
-    }
+      setReceiptData({ client: { ...client, totalDebt: Math.max(0, newDebt), loan: client.loan ? { ...client.loan, paidInstallments: newPaidInstallments } : null }, transaction: newEntry });
+    } catch (error) { showNotification('Error al registrar pago', 'error'); }
   };
 
   const handleShareReceipt = async () => {
@@ -244,14 +212,12 @@ const App = () => {
       const canvas = await window.html2canvas(receiptRef.current, { scale: 3, useCORS: true, backgroundColor: '#ffffff' });
       const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
       if (!blob) return;
-      const fileName = `Recibo_${receiptData.transaction.ref}.png`;
-      const file = new File([blob], fileName, { type: 'image/png' });
-
+      const file = new File([blob], `Recibo_${receiptData.transaction.ref}.png`, { type: 'image/png' });
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({ files: [file], title: 'Recibo', text: `Pago de ${receiptData.client.name}` });
       } else {
         const link = document.createElement('a');
-        link.download = fileName;
+        link.download = `Recibo_${receiptData.transaction.ref}.png`;
         link.href = canvas.toDataURL('image/png');
         link.click();
       }
@@ -259,11 +225,13 @@ const App = () => {
   };
 
   const sendWhatsAppReminder = (client) => {
-    const message = `Hola ${client.name}, te recordamos que tienes un pago pendiente de $${client.totalDebt.toLocaleString()}. Saludos de Connect Préstamos.`;
+    const message = `Hola ${client.name}, recordamos tu pago pendiente de $${client.totalDebt.toLocaleString()}. Connect Préstamos.`;
     window.open(`https://wa.me/${client.phone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(message)}`, '_blank');
   };
 
   const selectedClient = clients.find(c => c.id === selectedClientId);
+
+  // --- Componentes de Vista ---
 
   const LoginView = () => {
     const [isReg, setIsReg] = useState(false);
@@ -275,57 +243,23 @@ const App = () => {
         <div className="w-full max-w-sm bg-white rounded-[3rem] shadow-2xl p-10 border border-slate-100">
           <div className="w-20 h-20 bg-indigo-600 rounded-[2rem] text-white flex items-center justify-center mx-auto mb-8 shadow-xl shadow-indigo-200"><Users size={40} /></div>
           <h1 className="text-2xl font-black text-center text-slate-800 mb-8 tracking-tight">{isReg ? 'Registrarse' : 'Connect Préstamos'}</h1>
-          <form className="space-y-4" onSubmit={(e) => {
-            e.preventDefault();
-            if (isReg) handleRegister(name, email, pass);
-            else handleLogin(email, pass);
-          }}>
+          <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); if (isReg) handleRegister(name, email, pass); else handleLogin(email, pass); }}>
             {isReg && <input type="text" placeholder="Nombre completo" className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 outline-none font-bold text-sm focus:border-indigo-500" value={name} onChange={e => setName(e.target.value)} required />}
             <input type="email" placeholder="Correo electrónico" className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 outline-none font-bold text-sm focus:border-indigo-500" value={email} onChange={e => setEmail(e.target.value)} required />
             <input type="password" placeholder="Contraseña" className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 outline-none font-bold text-sm focus:border-indigo-500" value={pass} onChange={e => setPass(e.target.value)} required />
-            <button type="submit" className="w-full bg-indigo-600 text-white p-4 rounded-2xl font-black shadow-lg active:scale-95 transition-all mt-4">
-              {isReg ? 'Crear mi Cartera' : 'Entrar a mi Cartera'}
-            </button>
+            <button type="submit" className="w-full bg-indigo-600 text-white p-4 rounded-2xl font-black shadow-lg active:scale-95 transition-all mt-4">{isReg ? 'Crear Cartera' : 'Entrar'}</button>
           </form>
-          <button onClick={() => setIsReg(!isReg)} className="w-full mt-6 text-xs font-bold text-indigo-600 hover:underline">
-            {isReg ? '¿Ya tienes cuenta? Inicia sesión' : '¿No tienes cuenta? Regístrate'}
-          </button>
+          <button onClick={() => setIsReg(!isReg)} className="w-full mt-6 text-xs font-bold text-indigo-600 hover:underline">{isReg ? 'Ya tengo cuenta' : 'No tengo cuenta'}</button>
         </div>
       </div>
     );
   };
 
   const DashboardView = () => {
-    const filtered = clients.filter(c => 
-      c.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-      c.phone.includes(searchTerm) || 
-      c.cedula?.includes(searchTerm) ||
-      c.email?.toLowerCase().includes(searchTerm.toLowerCase())
-    );
-
-    const netCapitalOnStreet = clients.reduce((acc, curr) => {
-      if (curr.loan && curr.loan.totalToPay > 0) {
-        const principalRatio = curr.loan.amount / curr.loan.totalToPay;
-        return acc + (curr.totalDebt * principalRatio);
-      }
-      return acc + (curr.totalDebt || 0);
-    }, 0);
-    
-    const pendingProfit = clients.reduce((acc, curr) => {
-      if (curr.loan && curr.loan.totalToPay > 0) {
-        const profitRatio = (curr.loan.totalToPay - curr.loan.amount) / curr.loan.totalToPay;
-        return acc + (curr.totalDebt * profitRatio);
-      }
-      return acc;
-    }, 0);
-
-    const totalEarned = clients.reduce((acc, curr) => {
-      if (curr.loan) {
-        const profitPerInstallment = (curr.loan.totalToPay - curr.loan.amount) / curr.loan.totalInstallments;
-        return acc + (profitPerInstallment * curr.loan.paidInstallments);
-      }
-      return acc;
-    }, 0);
+    const filtered = clients.filter(c => c.name.toLowerCase().includes(searchTerm.toLowerCase()) || c.phone.includes(searchTerm) || c.cedula?.includes(searchTerm));
+    const netCapitalOnStreet = clients.reduce((acc, curr) => curr.loan ? acc + (curr.totalDebt * (curr.loan.amount / curr.loan.totalToPay)) : acc + (curr.totalDebt || 0), 0);
+    const pendingProfit = clients.reduce((acc, curr) => curr.loan ? acc + (curr.totalDebt * ((curr.loan.totalToPay - curr.loan.amount) / curr.loan.totalToPay)) : acc, 0);
+    const totalEarned = clients.reduce((acc, curr) => curr.loan ? acc + (((curr.loan.totalToPay - curr.loan.amount) / curr.loan.totalInstallments) * curr.loan.paidInstallments) : acc, 0);
 
     return (
       <div className="pb-20">
@@ -337,33 +271,21 @@ const App = () => {
               <button onClick={handleLogout} className="p-2 bg-slate-50 rounded-xl text-slate-400 hover:text-red-500 transition-colors"><LogOut size={20} /></button>
             </div>
           </div>
-          
           <div className="space-y-3">
             <div className="bg-slate-900 rounded-[2rem] p-6 text-white shadow-2xl relative overflow-hidden">
-               <div className="relative z-10">
-                 <p className="opacity-50 text-[10px] font-black uppercase tracking-widest mb-1">Capital Neto en Calle</p>
-                 <h3 className="text-4xl font-black">${Math.round(netCapitalOnStreet).toLocaleString()}</h3>
-               </div>
+               <div className="relative z-10"><p className="opacity-50 text-[10px] font-black uppercase tracking-widest mb-1">Capital Neto en Calle</p><h3 className="text-4xl font-black">${Math.round(netCapitalOnStreet).toLocaleString()}</h3></div>
                <CreditCard className="absolute -right-4 -bottom-4 w-32 h-32 opacity-10 rotate-12" />
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div className="bg-emerald-50 rounded-[2rem] p-5 border border-emerald-100 flex flex-col items-center">
-                 <p className="text-emerald-600/60 text-[9px] font-black uppercase tracking-widest mb-1 text-center">Ganancia Pendiente</p>
-                 <h3 className="text-xl font-black text-emerald-600">${Math.round(pendingProfit).toLocaleString()}</h3>
-              </div>
-              <div className="bg-indigo-50 rounded-[2rem] p-5 border border-indigo-100 flex flex-col items-center">
-                 <p className="text-indigo-600/60 text-[9px] font-black uppercase tracking-widest mb-1 text-center">Ganancia Cobrada</p>
-                 <h3 className="text-xl font-black text-indigo-600">${Math.round(totalEarned).toLocaleString()}</h3>
-              </div>
+              <div className="bg-emerald-50 rounded-[2rem] p-5 border border-emerald-100 flex flex-col items-center text-center"><p className="text-emerald-600/60 text-[9px] font-black uppercase tracking-widest mb-1">Ganancia Pendiente</p><h3 className="text-xl font-black text-emerald-600">${Math.round(pendingProfit).toLocaleString()}</h3></div>
+              <div className="bg-indigo-50 rounded-[2rem] p-5 border border-indigo-100 flex flex-col items-center text-center"><p className="text-indigo-600/60 text-[9px] font-black uppercase tracking-widest mb-1">Ganancia Cobrada</p><h3 className="text-xl font-black text-indigo-600">${Math.round(totalEarned).toLocaleString()}</h3></div>
             </div>
           </div>
-
           <div className="mt-6 relative">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
             <input type="text" placeholder="Buscar por Nombre, ID, Tel..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-12 pr-4 py-4 bg-slate-100 border-none rounded-2xl focus:ring-2 focus:ring-indigo-500 font-bold text-sm outline-none" />
           </div>
         </header>
-
         <main className="p-6 space-y-4">
           {filtered.map(client => (
             <div key={client.id} onClick={() => { setSelectedClientId(client.id); setView('profile'); }} className="bg-white p-5 rounded-[2rem] border border-slate-100 shadow-sm flex justify-between items-center active:scale-[0.98] transition-all cursor-pointer">
@@ -397,38 +319,24 @@ const App = () => {
             <button onClick={() => setView('edit_client')} className="p-2 text-indigo-400 bg-indigo-50 rounded-xl hover:bg-indigo-100 transition-colors"><Settings size={18} /></button>
           </div>
         </header>
-
         <main className="p-6 space-y-6">
           <div className="bg-white rounded-[2.5rem] p-8 shadow-sm border border-slate-100 flex flex-col items-center text-center">
             <div className="w-24 h-24 bg-indigo-600 text-white rounded-[2rem] flex items-center justify-center text-4xl font-black mb-4 shadow-xl shadow-indigo-200">{selectedClient.name.charAt(0)}</div>
             <h3 className="text-2xl font-black text-slate-800 mb-1">{selectedClient.name}</h3>
             <p className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1"><Fingerprint size={12} /> {selectedClient.cedula || 'Sin ID'}</p>
-            
             <div className="w-full grid grid-cols-2 gap-3 mt-6">
-              <div className="bg-slate-50 p-4 rounded-3xl border border-slate-100 text-center">
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Saldo Total</p>
-                <p className={`text-xl font-black ${selectedClient.totalDebt > 0.05 ? 'text-red-500' : 'text-emerald-500'}`}>${selectedClient.totalDebt.toLocaleString()}</p>
-              </div>
-              <div className="bg-slate-50 p-4 rounded-3xl border border-slate-100 text-center">
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Cuotas</p>
-                <p className="text-xl font-black text-indigo-600">{loan ? `${loan.paidInstallments}/${loan.totalInstallments}` : '0/0'}</p>
-              </div>
+              <div className="bg-slate-50 p-4 rounded-3xl border border-slate-100 text-center"><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Saldo Total</p><p className={`text-xl font-black ${selectedClient.totalDebt > 0.1 ? 'text-red-500' : 'text-emerald-500'}`}>${selectedClient.totalDebt.toLocaleString()}</p></div>
+              <div className="bg-slate-50 p-4 rounded-3xl border border-slate-100 text-center"><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Cuotas</p><p className="text-xl font-black text-indigo-600">{loan ? `${loan.paidInstallments}/${loan.totalInstallments}` : '0/0'}</p></div>
             </div>
-
             <div className="w-full space-y-3 mt-6">
-              {/* Lógica de botón robusta: si saldo es casi 0, permitir nuevo préstamo */}
-              {selectedClient.totalDebt > 0.05 ? (
-                <button onClick={() => sendWhatsAppReminder(selectedClient)} className="w-full py-4 bg-emerald-500 text-white rounded-2xl font-black flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all">
-                  <Send size={18} /> Enviar Recordatorio
-                </button>
+              {/* LÓGICA CORREGIDA: Uso de Math.round para evitar el error de $0 con botón Enviar Recordatorio */}
+              {Math.round(selectedClient.totalDebt) > 0 ? (
+                <button onClick={() => sendWhatsAppReminder(selectedClient)} className="w-full py-4 bg-emerald-500 text-white rounded-2xl font-black flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all"><Send size={18} /> Enviar Recordatorio</button>
               ) : (
-                <button onClick={() => setView('assign_loan')} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all">
-                  <TrendingUp size={18} /> Asignar Préstamo
-                </button>
+                <button onClick={() => setView('assign_loan')} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all"><TrendingUp size={18} /> Asignar Préstamo</button>
               )}
             </div>
           </div>
-
           <div className="space-y-4">
             <div className="flex justify-between items-center px-2">
               <h4 className="font-black text-slate-800 text-xs uppercase tracking-widest">Movimientos</h4>
@@ -450,12 +358,11 @@ const App = () => {
             </div>
           </div>
         </main>
-        {/* Modales de Confirmación y Transacción permanecen igual */}
         {showDeleteConfirm && (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[120] flex items-center justify-center p-6">
             <div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center">
-              <h3 className="text-xl font-black mb-2">¿Eliminar cliente?</h3>
-              <p className="text-sm text-slate-500 mb-8">Esta acción borrará permanentemente al cliente de la base de datos.</p>
+              <h3 className="text-xl font-black mb-2 text-slate-800">¿Eliminar cliente?</h3>
+              <p className="text-sm text-slate-500 mb-8 font-bold leading-tight">Esta acción borrará permanentemente al cliente de la base de datos.</p>
               <div className="flex flex-col gap-3">
                 <button onClick={() => removeClient(selectedClient.id)} className="w-full bg-red-500 text-white py-4 rounded-2xl font-black shadow-lg shadow-red-100 active:scale-95 transition-all">Sí, Eliminar</button>
                 <button onClick={() => setShowDeleteConfirm(false)} className="w-full bg-slate-100 text-slate-600 py-4 rounded-2xl font-black">Cancelar</button>
@@ -463,15 +370,14 @@ const App = () => {
             </div>
           </div>
         )}
-
         {isTransacting && (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-end sm:items-center justify-center p-4">
-            <div className="bg-white w-full max-w-md rounded-t-[2.5rem] sm:rounded-[2.5rem] p-8 shadow-2xl">
+            <div className="bg-white w-full max-w-md rounded-t-[2.5rem] sm:rounded-[2.5rem] p-8 shadow-2xl animate-in slide-in-from-bottom duration-300">
               <div className="flex justify-between items-center mb-6"><h3 className="text-xl font-black text-slate-800">Registrar Pago</h3><button onClick={() => setIsTransacting(false)} className="text-slate-400 p-2"><X /></button></div>
               <div className="space-y-4">
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100"><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Saldo para completar cuota</p><p className="text-2xl font-black text-indigo-600">${suggestedAmount.toLocaleString()}</p></div>
-                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase ml-1">Monto a pagar</label><input type="number" placeholder="Ej. 1600" className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 outline-none font-bold text-center text-xl" value={customAmount} onChange={(e) => setCustomAmount(e.target.value)} /></div>
-                <button disabled={finalPaymentAmount <= 0} onClick={() => { recordTransaction(selectedClient.id, 'Pago', finalPaymentAmount, ''); setIsTransacting(false); }} className={`w-full p-5 rounded-[2rem] font-black text-lg active:scale-95 transition-all mt-2 ${finalPaymentAmount > 0 ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-400'}`}>Confirmar Pago</button>
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 text-center"><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Saldo para completar cuota</p><p className="text-2xl font-black text-indigo-600">${suggestedAmount.toLocaleString()}</p></div>
+                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase ml-1">Monto a pagar</label><input type="number" placeholder="Ej. 1600" className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 outline-none font-bold text-center text-xl focus:border-indigo-500" value={customAmount} onChange={(e) => setCustomAmount(e.target.value)} /></div>
+                <button disabled={finalPaymentAmount <= 0} onClick={() => { recordTransaction(selectedClient.id, 'Pago', finalPaymentAmount, ''); setIsTransacting(false); }} className={`w-full p-5 rounded-[2rem] font-black text-lg active:scale-95 transition-all mt-2 ${finalPaymentAmount > 0 ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-100' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>Confirmar Pago</button>
               </div>
             </div>
           </div>
@@ -512,10 +418,10 @@ const App = () => {
           <h2 className="text-xl font-black text-slate-800">Editar Datos Nube</h2>
         </header>
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
-           <div><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Nombre Completo</label><input type="text" className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 outline-none font-bold" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} /></div>
-           <div><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">ID / Cédula</label><input type="text" className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 outline-none font-bold" value={formData.cedula} onChange={e => setFormData({...formData, cedula: e.target.value})} /></div>
-           <div><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Teléfono</label><input type="tel" className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 outline-none font-bold" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} /></div>
-           <div><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Dirección</label><textarea className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 outline-none font-bold" value={formData.address} onChange={e => setFormData({...formData, address: e.target.value})} /></div>
+           <div><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Nombre Completo</label><input type="text" className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 outline-none font-bold focus:border-indigo-500" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} /></div>
+           <div><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">ID / Cédula</label><input type="text" className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 outline-none font-bold focus:border-indigo-500" value={formData.cedula} onChange={e => setFormData({...formData, cedula: e.target.value})} /></div>
+           <div><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Teléfono</label><input type="tel" className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 outline-none font-bold focus:border-indigo-500" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} /></div>
+           <div><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Dirección</label><textarea className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 outline-none font-bold focus:border-indigo-500" value={formData.address} onChange={e => setFormData({...formData, address: e.target.value})} /></div>
            <button type="submit" className="w-full bg-indigo-600 text-white p-5 rounded-[2rem] font-black text-lg shadow-xl active:scale-95 transition-all">Guardar Cambios Cloud</button>
         </form>
       </div>
@@ -540,10 +446,10 @@ const App = () => {
         <form onSubmit={handleAssign} className="p-6 space-y-6">
           <div className="bg-indigo-50 p-6 rounded-3xl text-center"><p className="text-xs font-bold text-indigo-400 uppercase mb-1">Total a cobrar</p><h3 className="text-4xl font-black text-indigo-600">${total.toLocaleString()}</h3><p className="text-xs text-indigo-400 mt-2 font-bold uppercase tracking-widest italic">Cuotas de: ${inst.toFixed(2)}</p></div>
           <div className="grid grid-cols-2 gap-4">
-            <div className="col-span-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-1">Capital del Préstamo</label><input type="number" required className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 outline-none font-bold text-xl" value={loanData.amount} onChange={e => setLoanData({...loanData, amount: e.target.value})} placeholder="0.00" /></div>
-            <div><label className="text-[10px] font-black text-slate-400 uppercase ml-1">Interés (%)</label><input type="number" className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 outline-none font-bold" value={loanData.interest} onChange={e => setLoanData({...loanData, interest: e.target.value})} /></div>
-            <div><label className="text-[10px] font-black text-slate-400 uppercase ml-1">Cuotas</label><input type="number" className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 outline-none font-bold" value={loanData.installments} onChange={e => setLoanData({...loanData, installments: e.target.value})} /></div>
-            <div className="col-span-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-1">Frecuencia de Cobro</label><select className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 outline-none font-bold appearance-none cursor-pointer" value={loanData.frequency} onChange={e => setLoanData({...loanData, frequency: e.target.value})}><option value="Diario">Diario</option><option value="Semanal">Semanal</option><option value="Quincenal">Quincenal</option><option value="Mensual">Mensual</option></select></div>
+            <div className="col-span-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-1">Capital del Préstamo</label><input type="number" required className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 outline-none font-bold text-xl focus:border-indigo-500" value={loanData.amount} onChange={e => setLoanData({...loanData, amount: e.target.value})} placeholder="0.00" /></div>
+            <div><label className="text-[10px] font-black text-slate-400 uppercase ml-1">Interés (%)</label><input type="number" className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 outline-none font-bold focus:border-indigo-500" value={loanData.interest} onChange={e => setLoanData({...loanData, interest: e.target.value})} /></div>
+            <div><label className="text-[10px] font-black text-slate-400 uppercase ml-1">Cuotas</label><input type="number" className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 outline-none font-bold focus:border-indigo-500" value={loanData.installments} onChange={e => setLoanData({...loanData, installments: e.target.value})} /></div>
+            <div className="col-span-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-1">Frecuencia de Cobro</label><select className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 outline-none font-bold appearance-none cursor-pointer focus:border-indigo-500" value={loanData.frequency} onChange={e => setLoanData({...loanData, frequency: e.target.value})}><option value="Diario">Diario</option><option value="Semanal">Semanal</option><option value="Quincenal">Quincenal</option><option value="Mensual">Mensual</option></select></div>
           </div>
           <button type="submit" className="w-full bg-indigo-600 text-white p-5 rounded-[2rem] font-black text-lg shadow-xl active:scale-95 transition-all">Confirmar en Nube</button>
         </form>
