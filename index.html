@@ -3,26 +3,26 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Connect Préstamos - Sistema de Cartera</title>
+    <title>Connect Préstamos - Gestión Integral</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- React y Babel -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <!-- Firebase SDK Compat (Necesario para ejecutar en un solo HTML sin errores de require) -->
+    <!-- Firebase SDK Compat -->
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
-    <!-- Lucide Icons -->
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- html2canvas para Recibos -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
         body { font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
         .animate-in { animation: fadeIn 0.3s ease-out; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        [data-lucide] { visibility: hidden; }
-        .lucide { visibility: visible !important; }
+        .icon-container svg { display: inline-block; vertical-align: middle; }
+        input:focus, select:focus, textarea:focus { border-color: #4f46e5; outline: none; }
     </style>
 </head>
 <body class="bg-slate-50">
@@ -31,7 +31,6 @@
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
 
-        // --- Configuración Real de Firebase ---
         const firebaseConfig = {
             apiKey: "AIzaSyDid8PFmp7fKbLjFSn7mzMcrIfDgjEGwLM",
             authDomain: "connect-prestamos.firebaseapp.com",
@@ -42,23 +41,31 @@
             measurementId: "G-5VFZ5ZCBYZ"
         };
 
-        // Inicialización de Firebase Compat
         if (!firebase.apps.length) {
             firebase.initializeApp(firebaseConfig);
         }
         const auth = firebase.auth();
         const db = firebase.firestore();
 
-        // Mapeo de funciones de Firebase para mantener la lógica solicitada
-        const onSnapshot = (ref, callback) => ref.onSnapshot(callback);
-        const doc = (db, coll, user, sub, id) => db.collection(coll).doc(user).collection(sub).doc(id);
-        const collection = (db, coll, user, sub) => db.collection(coll).doc(user).collection(sub);
-
         const Icon = ({ name, size = 24, className = "" }) => {
-            useEffect(() => {
-                if (window.lucide) window.lucide.createIcons();
-            }, [name]);
-            return <i data-lucide={name} style={{ width: size, height: size }} className={`inline-block ${className}`}></i>;
+            const icons = {
+                "users": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
+                "log-out": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>,
+                "credit-card": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>,
+                "search": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>,
+                "user-plus": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>,
+                "arrow-left": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>,
+                "trash-2": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>,
+                "settings": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06-.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,
+                "send": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><line x1="22" y1="2" x2="11" y2="13"/><polyline points="22 2 15 22 11 13 2 9 22 2"/></svg>,
+                "trending-up": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>,
+                "check-circle-2": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><path d="m9 12 2 2 4-4"/></svg>,
+                "share-2": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>,
+                "x": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
+                "edit": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
+                "fingerprint": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M2 12a10 10 0 0 1 18-6"/><path d="M5 15a10 10 0 0 1 13.9-10.4"/><path d="M8 18a10 10 0 0 1 10.3-9"/><path d="M11 20a10 10 0 0 1 8.3-12"/><path d="M12 12a2 2 0 1 0-4 0v4"/><path d="M14 16a2 2 0 1 0 4 0v-4a6 6 0 0 0-12 0"/></svg>
+            };
+            return <span className={`icon-container inline-flex items-center justify-center ${className}`}>{icons[name] || null}</span>;
         };
 
         const App = () => {
@@ -69,442 +76,476 @@
             const [searchTerm, setSearchTerm] = useState('');
             const [notification, setNotification] = useState(null);
             const [receiptData, setReceiptData] = useState(null);
-            const [isGeneratingImage, setIsGeneratingImage] = useState(false);
-            const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
             const [loading, setLoading] = useState(true);
+            const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+            const [isTransacting, setIsTransacting] = useState(false);
             
             const receiptRef = useRef(null);
 
             useEffect(() => {
-                const unsubscribe = auth.onAuthStateChanged((firebaseUser) => {
-                    setUser(firebaseUser);
+                const unsubscribe = auth.onAuthStateChanged((u) => {
+                    setUser(u);
                     setLoading(false);
-                    if (firebaseUser) setView('dashboard');
+                    if (u) setView('dashboard');
                     else setView('login');
                 });
                 return () => unsubscribe();
             }, []);
 
             useEffect(() => {
-                if (!user) {
-                    setClients([]);
-                    return;
-                }
-                const clientsRef = collection(db, 'users', user.uid, 'clients');
-                const unsubscribe = onSnapshot(clientsRef, (snapshot) => {
-                    const clientsData = snapshot.docs.map(doc => ({
-                        id: doc.id,
-                        ...doc.data()
-                    }));
-                    setClients(clientsData);
-                });
-
-                return () => unsubscribe();
+                if (!user) return;
+                const unsub = db.collection('users').doc(user.uid).collection('clients')
+                    .onSnapshot((snap) => {
+                        const data = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        setClients(data);
+                    });
+                return () => unsub();
             }, [user]);
 
-            const showNotification = (message, type = 'success') => {
-                setNotification({ message, type });
+            const showNotify = (msg) => {
+                setNotification(msg);
                 setTimeout(() => setNotification(null), 3000);
             };
 
-            const handleRegister = async (name, email, password) => {
+            const handleLogin = async (e) => {
+                e.preventDefault();
                 try {
-                    const res = await auth.createUserWithEmailAndPassword(email, password);
-                    await res.user.updateProfile({ displayName: name });
-                    showNotification("Cuenta creada correctamente");
-                } catch (error) {
-                    showNotification("Error al registrarse", "error");
-                }
+                    await auth.signInWithEmailAndPassword(e.target.email.value, e.target.pass.value);
+                } catch (err) { alert("Credenciales incorrectas"); }
             };
 
-            const handleLogin = async (email, password) => {
+            const handleRegister = async (e) => {
+                e.preventDefault();
+                const nameValue = e.target.name.value;
                 try {
-                    await auth.signInWithEmailAndPassword(email, password);
-                    showNotification("Acceso concedido");
-                } catch (error) {
-                    showNotification("Error de acceso", "error");
-                }
+                    const res = await auth.createUserWithEmailAndPassword(e.target.email.value, e.target.pass.value);
+                    await res.user.updateProfile({ displayName: nameValue });
+                    // Forzar actualización de estado local con el nombre
+                    setUser({ ...res.user, displayName: nameValue });
+                } catch (err) { alert("Error al registrar"); }
             };
 
-            const handleLogout = () => auth.signOut();
-
-            const addClient = async (newClientData) => {
-                if (!user) return;
-                try {
-                    await db.collection('users').doc(user.uid).collection('clients').add({
-                        ...newClientData,
-                        totalDebt: 0,
-                        history: [],
-                        loan: null,
-                        createdAt: new Date().toISOString()
-                    });
-                    setView('dashboard');
-                    showNotification('Cliente registrado');
-                } catch (error) {
-                    showNotification('Error al guardar', 'error');
-                }
-            };
-
-            const updateClientData = async (updatedData) => {
-                if (!user || !updatedData.id) return;
-                try {
-                    const { id, ...data } = updatedData;
-                    await db.collection('users').doc(user.uid).collection('clients').doc(id).update(data);
-                    setView('profile');
-                    showNotification('Datos actualizados');
-                } catch (error) {
-                    showNotification('Error al actualizar', 'error');
-                }
-            };
-
-            const removeClient = async (id) => {
-                if (!user) return;
-                try {
-                    await db.collection('users').doc(user.uid).collection('clients').doc(id).delete();
-                    setView('dashboard');
-                    setSelectedClientId(null);
-                    setShowDeleteConfirm(false);
-                    showNotification('Cliente eliminado');
-                } catch (error) {
-                    showNotification('Error al eliminar', 'error');
-                }
-            };
-
-            const assignNewLoan = async (clientId, loanDetails) => {
-                if (!user) return;
-                try {
-                    await db.collection('users').doc(user.uid).collection('clients').doc(clientId).update({
-                        totalDebt: loanDetails.totalToPay,
-                        loan: { ...loanDetails, paidInstallments: 0, partialCredit: 0 }
-                    });
-                    setView('profile');
-                    showNotification('Préstamo asignado');
-                } catch (error) {
-                    showNotification('Error al asignar', 'error');
-                }
-            };
-
-            const recordTransaction = async (clientId, type, amount, description) => {
-                if (!user) return;
+            const recordTransaction = async (clientId, amount) => {
                 const client = clients.find(c => c.id === clientId);
                 if (!client) return;
-
-                const numAmount = parseFloat(amount);
-                const date = new Date().toLocaleDateString();
                 
-                let newPaidInstallments = client.loan?.paidInstallments || 0;
-                let newPartialCredit = client.loan?.partialCredit || 0;
-
-                if (type === 'Pago' && client.loan) {
-                    const totalAvailable = newPartialCredit + numAmount;
-                    const installmentsCovered = Math.floor(totalAvailable / client.loan.installmentAmount);
-                    newPartialCredit = totalAvailable % client.loan.installmentAmount;
-                    newPaidInstallments = Math.min(newPaidInstallments + installmentsCovered, client.loan.totalInstallments);
+                // Limpiar el monto de comas si el usuario las pone
+                const cleanAmount = amount.toString().replace(/,/g, '');
+                const num = parseFloat(cleanAmount);
+                if (isNaN(num) || num <= 0) {
+                    showNotify("Monto no válido");
+                    return;
                 }
 
-                const newDebt = type === 'Pago' ? client.totalDebt - numAmount : client.totalDebt + numAmount;
+                const newDebt = Math.max(0, client.totalDebt - num);
+                let newPaid = client.loan?.paidInstallments || 0;
                 
-                const newEntry = {
+                if (client.loan && num >= client.loan.installmentAmount) {
+                    const installmentsPaidThisTime = Math.floor(num / client.loan.installmentAmount);
+                    newPaid = Math.min(client.loan.totalInstallments, newPaid + installmentsPaidThisTime);
+                }
+
+                const entry = {
                     id: Date.now().toString(),
-                    type,
-                    amount: numAmount,
-                    date,
-                    description: description || (type === 'Pago' ? `Pago Cuota #${newPaidInstallments}` : 'Cargo extra'),
-                    ref: 'REC-' + Math.floor(1000 + Math.random() * 8999),
+                    amount: num,
+                    date: new Date().toLocaleDateString(),
+                    type: 'Pago',
+                    description: `Pago Cuota #${newPaid}`,
+                    ref: 'REC-' + Math.floor(1000 + Math.random() * 8999)
                 };
 
                 try {
                     await db.collection('users').doc(user.uid).collection('clients').doc(clientId).update({
-                        totalDebt: Math.max(0, newDebt),
-                        loan: client.loan ? { ...client.loan, paidInstallments: newPaidInstallments, partialCredit: newPartialCredit } : null,
-                        history: [newEntry, ...client.history]
+                        totalDebt: newDebt,
+                        history: [entry, ...client.history],
+                        'loan.paidInstallments': newPaid
                     });
-                    setReceiptData({ 
-                        client: { ...client, totalDebt: Math.max(0, newDebt), loan: client.loan ? { ...client.loan, paidInstallments: newPaidInstallments } : null }, 
-                        transaction: newEntry 
-                    });
-                } catch (error) {
-                    showNotification('Error al registrar pago', 'error');
+                    setReceiptData({ client: {...client, totalDebt: newDebt}, transaction: entry });
+                    showNotify("Pago registrado");
+                    setIsTransacting(false);
+                } catch (e) {
+                    showNotify("Error al guardar pago");
                 }
             };
 
-            const sendWhatsAppReminder = (client) => {
-                const message = `Hola ${client.name}, te recordamos que tienes un pago pendiente de $${client.totalDebt.toLocaleString()}. Saludos de Connect Préstamos.`;
-                window.open(`https://wa.me/${client.phone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(message)}`, '_blank');
+            const assignLoan = async (e) => {
+                e.preventDefault();
+                const amount = parseFloat(e.target.amount.value);
+                const interest = parseFloat(e.target.interest.value);
+                const inst = parseInt(e.target.inst.value);
+                const total = amount + (amount * (interest/100));
+                
+                await db.collection('users').doc(user.uid).collection('clients').doc(selectedClientId).update({
+                    totalDebt: total,
+                    loan: {
+                        amount, interest, totalToPay: total,
+                        totalInstallments: inst, paidInstallments: 0,
+                        installmentAmount: total / inst,
+                        frequency: e.target.freq.value
+                    }
+                });
+                setView('profile');
+                showNotify("Préstamo activado");
             };
 
-            if (loading) return <div className="h-screen flex items-center justify-center font-black text-indigo-600 bg-white">CARGANDO CARTERA...</div>;
+            const saveClient = async (e) => {
+                e.preventDefault();
+                const data = {
+                    name: e.target.name.value,
+                    cedula: e.target.cedula.value,
+                    email: e.target.email.value,
+                    phone: e.target.phone.value,
+                    address: e.target.address.value,
+                    totalDebt: 0,
+                    history: [],
+                    loan: null,
+                    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                };
+                await db.collection('users').doc(user.uid).collection('clients').add(data);
+                setView('dashboard');
+                showNotify("Cliente registrado");
+            };
+
+            const updateClient = async (e) => {
+                e.preventDefault();
+                const data = {
+                    name: e.target.name.value,
+                    cedula: e.target.cedula.value,
+                    email: e.target.email.value,
+                    phone: e.target.phone.value,
+                    address: e.target.address.value,
+                };
+                await db.collection('users').doc(user.uid).collection('clients').doc(selectedClientId).update(data);
+                setView('profile');
+                showNotify("Datos actualizados");
+            };
+
+            const handleShare = async () => {
+                if (!receiptRef.current) return;
+                setIsGeneratingImage(true);
+                try {
+                    const canvas = await html2canvas(receiptRef.current, { scale: 2, useCORS: true, backgroundColor: '#ffffff' });
+                    const blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+                    const file = new File([blob], 'recibo.png', { type: 'image/png' });
+                    if (navigator.share) {
+                        await navigator.share({ files: [file], title: 'Recibo' });
+                    } else {
+                        const link = document.createElement('a');
+                        link.download = 'recibo.png';
+                        link.href = canvas.toDataURL();
+                        link.click();
+                    }
+                } catch (e) {} finally { setIsGeneratingImage(false); }
+            };
+
+            if (loading) return <div className="h-screen flex items-center justify-center font-black text-indigo-600 bg-white">CONNECT CLOUD...</div>;
 
             const selectedClient = clients.find(c => c.id === selectedClientId);
 
-            // --- Vistas ---
+            // --- Dashboard Metrics Logic ---
+            const netCapitalOnStreet = clients.reduce((acc, curr) => {
+                if (curr.loan && curr.loan.totalToPay > 0) {
+                    const principalRatio = curr.loan.amount / curr.loan.totalToPay;
+                    return acc + (curr.totalDebt * principalRatio);
+                }
+                return acc + (curr.totalDebt || 0);
+            }, 0);
+            
+            const pendingProfit = clients.reduce((acc, curr) => {
+                if (curr.loan && curr.loan.totalToPay > 0) {
+                    const profitRatio = (curr.loan.totalToPay - curr.loan.amount) / curr.loan.totalToPay;
+                    return acc + (curr.totalDebt * profitRatio);
+                }
+                return acc;
+            }, 0);
 
-            const LoginView = () => {
-                const [isReg, setIsReg] = useState(false);
-                return (
-                    <div className="flex flex-col items-center justify-center min-h-screen bg-slate-50 p-6">
-                        <div className="w-full max-w-sm bg-white rounded-[3rem] shadow-2xl p-10 border border-slate-100">
-                            <div className="w-20 h-20 bg-indigo-600 rounded-[2rem] text-white flex items-center justify-center mx-auto mb-8 shadow-xl shadow-indigo-200"><Icon name="users" size={40} /></div>
-                            <h1 className="text-2xl font-black text-center text-slate-800 mb-8 tracking-tight">{isReg ? 'Registrarse' : 'Connect Préstamos'}</h1>
-                            <form className="space-y-4" onSubmit={(e) => {
-                                e.preventDefault();
-                                if (isReg) handleRegister(e.target.name.value, e.target.email.value, e.target.pass.value);
-                                else handleLogin(e.target.email.value, e.target.pass.value);
-                            }}>
-                                {isReg && <input name="name" type="text" placeholder="Nombre completo" className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 outline-none font-bold text-sm" required />}
-                                <input name="email" type="email" placeholder="Email" className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 outline-none font-bold text-sm" required />
-                                <input name="pass" type="password" placeholder="Contraseña" className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 outline-none font-bold text-sm" required />
-                                <button type="submit" className="w-full bg-indigo-600 text-white p-4 rounded-2xl font-black shadow-lg active:scale-95 transition-all mt-4">
-                                    {isReg ? 'Crear Cartera' : 'Entrar'}
-                                </button>
-                            </form>
-                            <button onClick={() => setIsReg(!isReg)} className="w-full mt-6 text-xs font-bold text-indigo-600 hover:underline">
-                                {isReg ? 'Ya tengo cuenta' : 'Regístrate aquí'}
-                            </button>
-                        </div>
-                    </div>
-                );
-            };
-
-            const DashboardView = () => {
-                const filtered = clients.filter(c => 
-                    c.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                    c.phone.includes(searchTerm)
-                );
-
-                const totalDebt = clients.reduce((a, b) => a + (b.totalDebt || 0), 0);
-
-                return (
-                    <div className="pb-20">
-                        <header className="bg-white p-6 sticky top-0 z-10 border-b shadow-sm">
-                            <div className="flex justify-between items-center mb-6">
-                                <div><h2 className="text-2xl font-black text-slate-800 tracking-tight">Cartera Total</h2><p className="text-slate-400 text-[10px] font-black uppercase tracking-widest">{user?.displayName}</p></div>
-                                <div className="flex gap-2">
-                                    <button onClick={() => setView('manage_clients')} className="p-2 bg-slate-50 rounded-xl text-slate-400 hover:text-indigo-600"><Icon name="users" size={20} /></button>
-                                    <button onClick={handleLogout} className="p-2 bg-slate-50 rounded-xl text-slate-400 hover:text-red-500"><Icon name="log-out" size={20} /></button>
-                                </div>
-                            </div>
-                            
-                            <div className="bg-slate-900 rounded-[2.5rem] p-7 text-white shadow-2xl relative overflow-hidden">
-                                <p className="opacity-50 text-[10px] font-black uppercase tracking-widest mb-1">Capital en Calle</p>
-                                <h3 className="text-4xl font-black">${totalDebt.toLocaleString()}</h3>
-                                <Icon name="credit-card" className="absolute -right-4 -bottom-4 opacity-10 rotate-12" size={120} />
-                            </div>
-
-                            <div className="mt-6 relative">
-                                <Icon name="search" className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
-                                <input type="text" placeholder="Buscar cliente..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-12 pr-4 py-4 bg-slate-100 border-none rounded-2xl focus:ring-2 focus:ring-indigo-500 font-bold text-sm outline-none" />
-                            </div>
-                        </header>
-
-                        <main className="p-6 space-y-4">
-                            {filtered.map(client => (
-                                <div key={client.id} onClick={() => { setSelectedClientId(client.id); setView('profile'); }} className="bg-white p-5 rounded-[2.2rem] border border-slate-100 shadow-sm flex justify-between items-center active:scale-[0.98] transition-all cursor-pointer">
-                                    <div className="flex items-center gap-4">
-                                        <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center font-black text-xl border border-indigo-100">{client.name.charAt(0)}</div>
-                                        <div><h4 className="font-black text-slate-800 leading-tight">{client.name}</h4><p className="text-[10px] text-slate-400 font-bold uppercase mt-1">{client.loan ? client.loan.frequency : 'Disponible'}</p></div>
-                                    </div>
-                                    <p className={`font-black text-lg ${client.totalDebt > 0.1 ? 'text-red-500' : 'text-emerald-500'}`}>${(client.totalDebt || 0).toLocaleString()}</p>
-                                </div>
-                            ))}
-                        </main>
-                        <button onClick={() => setView('add_client')} className="fixed bottom-6 right-6 w-16 h-16 bg-indigo-600 text-white rounded-[2rem] shadow-2xl flex items-center justify-center z-20 active:scale-90 transition-transform"><Icon name="user-plus" size={28} /></button>
-                    </div>
-                );
-            };
-
-            const ProfileView = () => {
-                if (!selectedClient) return null;
-                const [isTransacting, setIsTransacting] = useState(false);
-                const loan = selectedClient.loan;
-
-                return (
-                    <div className="pb-10 min-h-screen bg-slate-50">
-                        <header className="p-6 bg-white flex items-center justify-between border-b sticky top-0 z-10">
-                            <button onClick={() => setView('dashboard')} className="p-3 text-slate-400"><Icon name="arrow-left"/></button>
-                            <div className="flex gap-2">
-                                <button onClick={() => setShowDeleteConfirm(true)} className="p-3 text-red-400 bg-red-50 rounded-2xl"><Icon name="trash-2" size={18} /></button>
-                                <button onClick={() => setView('edit_client')} className="p-3 text-indigo-400 bg-indigo-50 rounded-2xl"><Icon name="settings" size={18} /></button>
-                            </div>
-                        </header>
-
-                        <main className="p-6 space-y-6">
-                            <div className="bg-white rounded-[2.8rem] p-8 shadow-sm border border-slate-100 flex flex-col items-center text-center">
-                                <div className="w-24 h-24 bg-indigo-600 text-white rounded-[2.2rem] flex items-center justify-center text-4xl font-black mb-4 shadow-xl shadow-indigo-100">{selectedClient.name.charAt(0)}</div>
-                                <h3 className="text-2xl font-black text-slate-800">{selectedClient.name}</h3>
-                                <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-2">{selectedClient.cedula || 'Sin ID'}</p>
-                                
-                                <div className="w-full grid grid-cols-2 gap-4 mt-8">
-                                    <div className="bg-slate-50 p-5 rounded-[2rem] border border-slate-100 text-center">
-                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Saldo</p>
-                                        <p className={`text-xl font-black ${selectedClient.totalDebt > 0.05 ? 'text-red-500' : 'text-emerald-500'}`}>${selectedClient.totalDebt.toLocaleString()}</p>
-                                    </div>
-                                    <div className="bg-slate-50 p-5 rounded-[2rem] border border-slate-100 text-center">
-                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Cuotas</p>
-                                        <p className="text-xl font-black text-indigo-600">{loan ? `${loan.paidInstallments}/${loan.totalInstallments}` : '0/0'}</p>
-                                    </div>
-                                </div>
-
-                                <div className="w-full mt-8">
-                                    {/* CORRECCIÓN JUAN PEREZ: Si el saldo es casi 0, permitir nuevo préstamo */}
-                                    {Math.round(selectedClient.totalDebt) > 0 ? (
-                                        <button onClick={() => sendWhatsAppReminder(selectedClient)} className="w-full py-5 bg-emerald-500 text-white rounded-[1.8rem] font-black flex items-center justify-center gap-3 shadow-xl shadow-emerald-100 active:scale-95 transition-all">
-                                            <Icon name="send" size={20} /> Enviar Recordatorio
-                                        </button>
-                                    ) : (
-                                        <button onClick={() => setView('assign_loan')} className="w-full py-5 bg-indigo-600 text-white rounded-[1.8rem] font-black flex items-center justify-center gap-3 shadow-xl shadow-indigo-100 active:scale-95 transition-all">
-                                            <Icon name="trending-up" size={20} /> Asignar Préstamo
-                                        </button>
-                                    )}
-                                </div>
-                            </div>
-
-                            <div className="space-y-4 pb-10">
-                                <div className="flex justify-between items-center px-4">
-                                    <h4 className="font-black text-[11px] uppercase text-slate-400 tracking-widest">Movimientos</h4>
-                                    <button onClick={() => setIsTransacting(true)} className="bg-indigo-600 text-white px-5 py-2.5 rounded-2xl text-[11px] font-black shadow-lg">Cobrar</button>
-                                </div>
-                                <div className="space-y-3">
-                                    {selectedClient.history?.map(item => (
-                                        <div key={item.id} className="bg-white p-5 rounded-[1.8rem] border border-slate-100 flex justify-between items-center shadow-sm">
-                                            <div className="flex items-center gap-4">
-                                                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${item.type === 'Pago' ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'}`}><Icon name="check-circle-2" size={22} /></div>
-                                                <div><p className="font-bold text-slate-800 text-sm">{item.description}</p><p className="text-[10px] text-slate-400 font-black mt-1 uppercase">{item.date}</p></div>
-                                            </div>
-                                            <p className={`font-black text-lg ${item.type === 'Pago' ? 'text-emerald-500' : 'text-red-500'}`}>${item.amount.toLocaleString()}</p>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        </main>
-
-                        {showDeleteConfirm && (
-                            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[120] flex items-center justify-center p-6">
-                                <div className="bg-white w-full max-w-xs rounded-3xl p-8 shadow-2xl text-center">
-                                    <h3 className="text-xl font-black mb-2">¿Eliminar cliente?</h3>
-                                    <div className="flex flex-col gap-3 mt-8">
-                                        <button onClick={() => removeClient(selectedClient.id)} className="w-full bg-red-500 text-white py-4 rounded-2xl font-black">Sí, Eliminar</button>
-                                        <button onClick={() => setShowDeleteConfirm(false)} className="w-full bg-slate-100 text-slate-600 py-4 rounded-2xl font-black">Cancelar</button>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-
-                        {isTransacting && (
-                            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-end sm:items-center justify-center p-4">
-                                <div className="bg-white w-full max-w-md rounded-[2.5rem] p-8 shadow-2xl animate-in">
-                                    <div className="flex justify-between items-center mb-6"><h3 className="text-xl font-black text-slate-800">Registrar Pago</h3><button onClick={() => setIsTransacting(false)} className="text-slate-400 p-2"><Icon name="x" /></button></div>
-                                    <div className="space-y-4">
-                                        <input type="number" id="payAmount" placeholder="Monto $" className="w-full p-5 rounded-2xl bg-slate-50 border outline-none font-black text-center text-2xl focus:border-indigo-500" />
-                                        <button onClick={() => { 
-                                            const val = document.getElementById('payAmount').value;
-                                            if(val) recordTransaction(selectedClient.id, 'Pago', val, '');
-                                            setIsTransacting(false);
-                                        }} className="w-full p-5 rounded-2xl font-black text-lg bg-emerald-500 text-white shadow-lg">Confirmar Pago</button>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-                );
-            };
-
-            const ManageClientsView = () => {
-                return (
-                    <div className="bg-white min-h-screen animate-in">
-                        <header className="p-6 border-b flex items-center gap-4 bg-white sticky top-0 z-10">
-                            <button onClick={() => setView('dashboard')} className="p-3 text-slate-400"><Icon name="arrow-left"/></button>
-                            <h2 className="text-xl font-black text-slate-800">Directorio Cloud</h2>
-                        </header>
-                        <div className="p-6 space-y-4">
-                            {clients.map(client => (
-                                <div key={client.id} className="bg-slate-50 p-5 rounded-3xl border border-slate-100 flex justify-between items-center">
-                                    <div className="flex gap-3 items-center">
-                                        <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center font-bold text-indigo-600">{client.name.charAt(0)}</div>
-                                        <div><p className="font-black text-slate-800 text-sm leading-none">{client.name}</p><p className="text-[10px] font-bold text-slate-400 mt-1 uppercase">{client.phone}</p></div>
-                                    </div>
-                                    <button onClick={() => { setSelectedClientId(client.id); setView('edit_client'); }} className="p-3 bg-white text-indigo-600 rounded-xl shadow-sm"><Icon name="edit" size={16} /></button>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                );
-            };
-
-            const EditClientView = () => {
-                const [formData, setFormData] = useState({ ...selectedClient });
-                return (
-                    <div className="pb-10 bg-white min-h-screen animate-in">
-                        <header className="p-6 border-b flex items-center gap-4">
-                            <button onClick={() => setView('manage_clients')} className="p-3 text-slate-400"><Icon name="arrow-left"/></button>
-                            <h2 className="text-xl font-black">Editar Datos</h2>
-                        </header>
-                        <form onSubmit={(e) => { e.preventDefault(); updateClientData(formData); }} className="p-8 space-y-6">
-                            <input type="text" className="w-full p-4 rounded-2xl bg-slate-50 border outline-none font-bold" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} placeholder="Nombre" />
-                            <input type="text" className="w-full p-4 rounded-2xl bg-slate-50 border outline-none font-bold" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} placeholder="WhatsApp" />
-                            <button type="submit" className="w-full bg-indigo-600 text-white p-5 rounded-[2rem] font-black shadow-xl">Guardar Cambios</button>
-                        </form>
-                    </div>
-                );
-            };
-
-            const AssignLoanView = () => {
-                const handleAssign = (e) => {
-                    e.preventDefault();
-                    const amount = parseFloat(e.target.amount.value);
-                    const interest = parseFloat(e.target.interest.value);
-                    const inst = parseInt(e.target.inst.value);
-                    const total = amount + (amount * (interest / 100));
-                    assignNewLoan(selectedClient.id, {
-                        amount, interest, totalToPay: total,
-                        installmentAmount: total / inst, frequency: e.target.freq.value, totalInstallments: inst,
-                        startDate: new Date().toLocaleDateString()
-                    });
-                };
-                return (
-                    <div className="pb-10 bg-white min-h-screen animate-in">
-                        <header className="p-6 border-b flex items-center gap-4 bg-white sticky top-0 z-10"><button onClick={() => setView('profile')} className="p-3 text-slate-400"><Icon name="arrow-left"/></button><h2 className="text-xl font-black">Nuevo Préstamo</h2></header>
-                        <form onSubmit={handleAssign} className="p-8 space-y-6">
-                            <input name="amount" type="number" placeholder="Capital $" className="w-full p-5 rounded-2xl bg-slate-50 border font-black text-2xl outline-none" required />
-                            <div className="grid grid-cols-2 gap-4">
-                                <input name="interest" type="number" defaultValue="10" placeholder="Interés %" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold" />
-                                <input name="inst" type="number" defaultValue="10" placeholder="Cuotas" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold" />
-                            </div>
-                            <select name="freq" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none"><option>Semanal</option><option>Diario</option><option>Quincenal</option><option>Mensual</option></select>
-                            <button type="submit" className="w-full bg-indigo-600 text-white p-5 rounded-[2rem] font-black shadow-xl mt-6">Activar Préstamo Cloud</button>
-                        </form>
-                    </div>
-                );
-            };
-
-            const AddClientView = () => {
-                const handleSubmit = (e) => {
-                    e.preventDefault();
-                    addClient({ name: e.target.name.value, cedula: e.target.cedula.value, phone: e.target.phone.value });
-                };
-                return (
-                    <div className="pb-10 bg-white min-h-screen animate-in">
-                        <header className="p-6 bg-white border-b flex items-center gap-4 sticky top-0 z-10"><button onClick={() => setView('dashboard')} className="p-3 text-slate-400"><Icon name="arrow-left"/></button><h2 className="text-xl font-black text-slate-800">Registrar Cliente</h2></header>
-                        <form onSubmit={handleSubmit} className="p-8 space-y-6">
-                            <input name="name" type="text" placeholder="Nombre completo" className="w-full p-4 rounded-2xl bg-slate-100 border outline-none font-bold" required />
-                            <input name="cedula" type="text" placeholder="ID / Cédula" className="w-full p-4 rounded-2xl bg-slate-100 border outline-none font-bold" />
-                            <input name="phone" type="tel" placeholder="WhatsApp (Ej: 809...)" className="w-full p-4 rounded-2xl bg-slate-100 border outline-none font-bold" required />
-                            <button type="submit" className="w-full bg-indigo-600 text-white p-5 rounded-[2.2rem] font-black shadow-xl">Sincronizar a Nube</button>
-                        </form>
-                    </div>
-                );
-            };
+            const totalEarned = clients.reduce((acc, curr) => {
+                if (curr.loan) {
+                    const profitPerInstallment = (curr.loan.totalToPay - curr.loan.amount) / curr.loan.totalInstallments;
+                    return acc + (profitPerInstallment * curr.loan.paidInstallments);
+                }
+                return acc;
+            }, 0);
 
             return (
-                <div className="max-w-md mx-auto min-h-screen bg-white font-sans text-slate-900 overflow-x-hidden">
-                    {notification && <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[110] px-6 py-3 rounded-2xl shadow-2xl bg-slate-900 text-white text-xs font-black animate-in">{notification.message}</div>}
-                    {view === 'login' && <LoginView />}
-                    {view === 'dashboard' && <DashboardView />}
-                    {view === 'add_client' && <AddClientView />}
-                    {view === 'manage_clients' && <ManageClientsView />}
-                    {view === 'edit_client' && <EditClientView />}
-                    {view === 'profile' && <ProfileView />}
-                    {view === 'assign_loan' && <AssignLoanView />}
+                <div className="max-w-md mx-auto min-h-screen bg-white shadow-2xl relative overflow-x-hidden">
+                    {notification && <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[110] bg-slate-900 text-white px-6 py-3 rounded-2xl text-xs font-black shadow-2xl animate-in">{notification}</div>}
+
+                    {view === 'login' && (
+                        <div className="p-10 flex flex-col items-center justify-center h-screen animate-in bg-white">
+                            <div className="w-20 h-20 bg-indigo-600 rounded-[2.2rem] flex items-center justify-center text-white mb-8 shadow-xl"><Icon name="users" size={40} /></div>
+                            <h1 className="text-2xl font-black mb-8 text-slate-800 tracking-tight">Connect Préstamos</h1>
+                            <form onSubmit={handleLogin} className="w-full space-y-4">
+                                <input name="email" type="email" placeholder="Email Operador" className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-sm outline-none" required />
+                                <input name="pass" type="password" placeholder="Contraseña" className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-sm outline-none" required />
+                                <button className="w-full bg-indigo-600 text-white p-4 rounded-2xl font-black shadow-lg">Entrar a Cartera</button>
+                            </form>
+                            <button onClick={() => setView('register')} className="mt-6 text-indigo-600 font-bold text-sm">Crear cuenta nueva</button>
+                        </div>
+                    )}
+
+                    {view === 'register' && (
+                        <div className="p-10 flex flex-col items-center justify-center h-screen animate-in bg-white">
+                            <h1 className="text-2xl font-black mb-8 text-slate-800">Nueva Cartera Cloud</h1>
+                            <form onSubmit={handleRegister} className="w-full space-y-4">
+                                <input name="name" type="text" placeholder="Tu Nombre Completo" className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold outline-none" required />
+                                <input name="email" type="email" placeholder="Email" className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold outline-none" required />
+                                <input name="pass" type="password" placeholder="Contraseña" className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold outline-none" required />
+                                <button className="w-full bg-indigo-600 text-white p-4 rounded-2xl font-black shadow-lg">Registrar Cartera</button>
+                            </form>
+                            <button onClick={() => setView('login')} className="mt-6 text-indigo-600 font-bold text-sm">Ya tengo cuenta</button>
+                        </div>
+                    )}
+
+                    {view === 'dashboard' && (
+                        <div className="animate-in bg-slate-50/30 min-h-screen">
+                            <header className="p-6 border-b bg-white sticky top-0 z-10 shadow-sm">
+                                <div className="flex justify-between items-center mb-6">
+                                    <div>
+                                        <h2 className="text-2xl font-black text-slate-800">Cartera Total</h2>
+                                        {/* CORRECCIÓN: Mostrar nombre del usuario logueado */}
+                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Operador: {user?.displayName || 'Cargando...'}</p>
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <button onClick={() => setView('portfolio')} className="p-3 bg-slate-50 rounded-2xl text-slate-400 hover:text-indigo-600 transition-colors"><Icon name="users" size={20}/></button>
+                                        <button onClick={() => auth.signOut()} className="p-3 bg-slate-50 rounded-2xl text-slate-400 hover:text-red-500 transition-colors"><Icon name="log-out" size={20}/></button>
+                                    </div>
+                                </div>
+                                <div className="space-y-3">
+                                    <div className="bg-slate-900 p-7 rounded-[2.5rem] text-white shadow-2xl relative overflow-hidden">
+                                        <p className="opacity-50 text-[10px] font-black uppercase tracking-widest mb-1">Capital Neto en Calle</p>
+                                        <h3 className="text-4xl font-black tracking-tight">${Math.round(netCapitalOnStreet).toLocaleString()}</h3>
+                                        <Icon name="credit-card" className="absolute -right-6 -bottom-6 opacity-10 rotate-12" size={120} />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div className="bg-emerald-50 rounded-[2rem] p-5 border border-emerald-100 flex flex-col items-center text-center">
+                                            <p className="text-emerald-600/60 text-[9px] font-black uppercase tracking-widest mb-1">Ganancia Pendiente</p>
+                                            <h3 className="text-xl font-black text-emerald-600">${Math.round(pendingProfit).toLocaleString()}</h3>
+                                        </div>
+                                        <div className="bg-indigo-50 rounded-[2rem] p-5 border border-indigo-100 flex flex-col items-center text-center">
+                                            <p className="text-indigo-600/60 text-[9px] font-black uppercase tracking-widest mb-1">Ganancia Cobrada</p>
+                                            <h3 className="text-xl font-black text-indigo-600">${Math.round(totalEarned).toLocaleString()}</h3>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="mt-6 relative">
+                                    <Icon name="search" className="absolute left-4 top-4 text-slate-300" size={18} />
+                                    <input type="text" placeholder="Buscar cliente..." className="w-full pl-12 p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-sm outline-none" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+                                </div>
+                            </header>
+                            <main className="p-6 space-y-4">
+                                {clients.filter(c => c.name.toLowerCase().includes(searchTerm.toLowerCase())).map(c => (
+                                    <div key={c.id} onClick={() => { setSelectedClientId(c.id); setView('profile'); }} className="p-5 bg-white border border-slate-100 rounded-[2.2rem] shadow-sm flex justify-between items-center cursor-pointer active:scale-[0.98] transition-all">
+                                        <div className="flex items-center gap-4">
+                                            <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center font-black text-xl border border-indigo-100/30">{c.name[0]}</div>
+                                            <div><h4 className="font-black text-slate-800 leading-none mb-1.5">{c.name}</h4><p className="text-[9px] text-slate-400 font-black uppercase tracking-widest bg-slate-50 px-2 py-0.5 rounded-full inline-block">{c.loan ? c.loan.frequency : 'Disponible'}</p></div>
+                                        </div>
+                                        <p className={`font-black text-lg ${c.totalDebt > 0.1 ? 'text-red-500' : 'text-emerald-500'}`}>${(c.totalDebt || 0).toLocaleString()}</p>
+                                    </div>
+                                ))}
+                            </main>
+                            <button onClick={() => setView('add_client')} className="fixed bottom-8 right-8 w-16 h-16 bg-indigo-600 text-white rounded-[2rem] shadow-2xl flex items-center justify-center active:scale-90 transition-transform"><Icon name="user-plus" size={28} /></button>
+                        </div>
+                    )}
+
+                    {view === 'portfolio' && (
+                        <div className="animate-in bg-white min-h-screen">
+                            <header className="p-6 border-b flex items-center gap-4 bg-white sticky top-0 z-10 shadow-sm">
+                                <button onClick={() => setView('dashboard')} className="p-3 text-slate-400 hover:bg-slate-50 rounded-2xl transition-colors"><Icon name="arrow-left"/></button>
+                                <h2 className="text-xl font-black text-slate-800">Cartera de Clientes</h2>
+                            </header>
+                            <main className="p-6 space-y-4">
+                                {clients.map(c => (
+                                    <div key={c.id} className="p-5 bg-slate-50 border border-slate-100 rounded-[2rem] flex justify-between items-center">
+                                        <div className="flex gap-4 items-center">
+                                            <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center font-black text-indigo-600 border border-slate-200">{c.name[0]}</div>
+                                            <div>
+                                                <p className="font-black text-slate-800 text-sm leading-none mb-1">{c.name}</p>
+                                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{c.phone}</p>
+                                            </div>
+                                        </div>
+                                        <button onClick={() => { setSelectedClientId(c.id); setView('edit_client'); }} className="p-3 bg-white text-indigo-600 rounded-xl border shadow-sm active:scale-90 transition-transform"><Icon name="edit" size={16}/></button>
+                                    </div>
+                                ))}
+                            </main>
+                        </div>
+                    )}
+
+                    {view === 'profile' && selectedClient && (
+                        <div className="animate-in bg-white min-h-screen">
+                            <header className="p-6 border-b flex justify-between items-center bg-white sticky top-0 z-10">
+                                <button onClick={() => setView('dashboard')} className="p-3 text-slate-400"><Icon name="arrow-left"/></button>
+                                <div className="flex gap-2">
+                                    <button onClick={async () => { if(confirm("¿Eliminar cliente?")) { await db.collection('users').doc(user.uid).collection('clients').doc(selectedClient.id).delete(); setView('dashboard'); } }} className="p-3 text-red-400 bg-red-50 rounded-2xl active:scale-90"><Icon name="trash-2" size={18}/></button>
+                                    <button onClick={() => setView('edit_client')} className="p-3 text-indigo-400 bg-indigo-50 rounded-2xl active:scale-90"><Icon name="settings" size={18}/></button>
+                                </div>
+                            </header>
+                            <main className="p-6 space-y-6">
+                                <div className="bg-white rounded-[2.8rem] p-8 border border-slate-100 shadow-sm flex flex-col items-center text-center">
+                                    <div className="w-24 h-24 bg-indigo-600 rounded-[2.2rem] flex items-center justify-center text-white text-4xl font-black mb-4 shadow-xl shadow-indigo-100">{selectedClient.name[0]}</div>
+                                    <h3 className="text-2xl font-black text-slate-800 leading-tight">{selectedClient.name}</h3>
+                                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-2 flex items-center gap-1"><Icon name="fingerprint" size={12}/> {selectedClient.cedula || 'SIN IDENTIFICACIÓN'}</p>
+                                    
+                                    <div className="grid grid-cols-2 gap-4 w-full mt-8">
+                                        <div className="bg-slate-50 p-5 rounded-[2rem] border border-slate-100 text-center">
+                                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Saldo Total</p>
+                                            <p className={`text-xl font-black ${selectedClient.totalDebt > 0.05 ? 'text-red-500' : 'text-emerald-500'}`}>${selectedClient.totalDebt.toLocaleString()}</p>
+                                        </div>
+                                        <div className="bg-slate-50 p-5 rounded-[2rem] border border-slate-100 text-center">
+                                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Cuotas Pagas</p>
+                                            <p className="text-xl font-black text-indigo-600">{selectedClient.loan ? `${selectedClient.loan.paidInstallments}/${selectedClient.loan.totalInstallments}` : '0/0'}</p>
+                                        </div>
+                                    </div>
+
+                                    <div className="w-full mt-8">
+                                        {Math.round(selectedClient.totalDebt) > 0 ? (
+                                            <button onClick={() => window.open(`https://wa.me/${selectedClient.phone.replace(/\D/g,'')}?text=Recordatorio de pago Connect Préstamos: $${selectedClient.totalDebt.toLocaleString()}`)} className="w-full py-5 bg-emerald-500 text-white rounded-[1.8rem] font-black flex items-center justify-center gap-3 shadow-xl active:scale-95 transition-all">
+                                                <Icon name="send" size={20} /> Enviar Recordatorio
+                                            </button>
+                                        ) : (
+                                            <button onClick={() => setView('assign_loan')} className="w-full py-5 bg-indigo-600 text-white rounded-[1.8rem] font-black flex items-center justify-center gap-3 shadow-xl active:scale-95 transition-all">
+                                                <Icon name="trending-up" size={20} /> Asignar Nuevo Préstamo
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className="space-y-4 pb-20">
+                                    <div className="flex justify-between items-center px-4">
+                                        <h4 className="font-black text-[11px] uppercase text-slate-400 tracking-widest">Movimientos Cloud</h4>
+                                        {/* CORRECCIÓN: Botón "Cobrar Cuota" que abre el modal seguro */}
+                                        <button onClick={() => setIsTransacting(true)} className="bg-indigo-600 text-white px-5 py-2.5 rounded-2xl text-[11px] font-black shadow-lg shadow-indigo-100 active:scale-95 transition-transform">Cobrar Cuota</button>
+                                    </div>
+                                    <div className="space-y-3">
+                                        {selectedClient.history?.map(h => (
+                                            <div key={h.id} className="p-5 bg-white border border-slate-100 rounded-[1.8rem] flex justify-between items-center shadow-sm">
+                                                <div className="flex items-center gap-4">
+                                                    <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center border border-emerald-100/50"><Icon name="check-circle-2" size={22}/></div>
+                                                    <div><p className="font-bold text-slate-800 text-sm leading-none">{h.description}</p><p className="text-[10px] text-slate-400 mt-1 uppercase font-black">{h.date}</p></div>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <p className="font-black text-emerald-500 text-xl">${h.amount.toLocaleString()}</p>
+                                                    <button onClick={() => setReceiptData({client: selectedClient, transaction: h})} className="p-2 text-slate-300"><Icon name="share-2" size={16}/></button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </main>
+                        </div>
+                    )}
+
+                    {/* MODAL PARA COBRAR CUOTA (REEMPLAZA EL PROMPT) */}
+                    {isTransacting && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[150] flex items-end sm:items-center justify-center p-4">
+                            <div className="bg-white w-full max-w-md rounded-t-[2.5rem] sm:rounded-[2.5rem] p-8 shadow-2xl animate-in">
+                                <div className="flex justify-between items-center mb-6">
+                                    <h3 className="text-xl font-black text-slate-800">Registrar Pago</h3>
+                                    <button onClick={() => setIsTransacting(false)} className="text-slate-400 p-2"><Icon name="x" /></button>
+                                </div>
+                                <div className="space-y-6">
+                                    <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100 text-center">
+                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Monto sugerido (Cuota)</p>
+                                        <p className="text-3xl font-black text-indigo-600">${selectedClient.loan?.installmentAmount.toLocaleString()}</p>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Monto a cobrar</label>
+                                        <input 
+                                            id="inputAmount"
+                                            type="number" 
+                                            placeholder="Ej: 1500" 
+                                            defaultValue={selectedClient.loan?.installmentAmount}
+                                            className="w-full p-5 bg-slate-50 border border-slate-200 rounded-2xl font-black text-center text-2xl focus:border-indigo-500 outline-none" 
+                                        />
+                                    </div>
+                                    <button 
+                                        onClick={() => recordTransaction(selectedClient.id, document.getElementById('inputAmount').value)}
+                                        className="w-full bg-emerald-500 text-white p-5 rounded-[2rem] font-black text-lg shadow-xl shadow-emerald-100 active:scale-95 transition-all"
+                                    >
+                                        Confirmar Cobro Cloud
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {view === 'add_client' && (
+                        <div className="animate-in bg-white min-h-screen">
+                            <header className="p-6 border-b flex items-center gap-4 bg-white sticky top-0 z-10 shadow-sm">
+                                <button onClick={() => setView('dashboard')} className="p-3 text-slate-400 hover:bg-slate-50 rounded-2xl transition-colors"><Icon name="arrow-left"/></button>
+                                <h2 className="text-xl font-black text-slate-800">Registrar Cliente Cloud</h2>
+                            </header>
+                            <form onSubmit={saveClient} className="p-8 space-y-5">
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">Nombre Completo</label><input name="name" type="text" placeholder="Ej: Juan Pérez" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold text-sm" required /></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">Cédula / ID</label><input name="cedula" type="text" placeholder="001-XXXXXXX-X" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold text-sm" /></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">Correo Electrónico</label><input name="email" type="email" placeholder="cliente@ejemplo.com" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold text-sm" /></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">Teléfono WhatsApp</label><input name="phone" type="tel" placeholder="8090000000" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold text-sm" required /></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">Ubicación / Dirección</label><textarea name="address" rows="3" placeholder="Calle, Sector, Ciudad..." className="w-full p-4 bg-slate-50 border rounded-2xl font-bold text-sm resize-none" /></div>
+                                <button className="w-full bg-indigo-600 text-white p-5 rounded-[2.2rem] font-black shadow-xl active:scale-95 transition-all mt-4">Sincronizar a Cartera</button>
+                            </form>
+                        </div>
+                    )}
+
+                    {view === 'edit_client' && selectedClient && (
+                        <div className="animate-in bg-white min-h-screen">
+                            <header className="p-6 border-b flex items-center gap-4 bg-white sticky top-0 z-10 shadow-sm">
+                                <button onClick={() => setView('portfolio')} className="p-3 text-slate-400 hover:bg-slate-50 rounded-2xl transition-colors"><Icon name="arrow-left"/></button>
+                                <h2 className="text-xl font-black text-slate-800">Editar Datos Nube</h2>
+                            </header>
+                            <form onSubmit={updateClient} className="p-8 space-y-5">
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">Nombre</label><input name="name" type="text" defaultValue={selectedClient.name} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold text-sm" required /></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">Cédula</label><input name="cedula" type="text" defaultValue={selectedClient.cedula} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold text-sm" /></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">Email</label><input name="email" type="email" defaultValue={selectedClient.email} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold text-sm" /></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">Teléfono</label><input name="phone" type="tel" defaultValue={selectedClient.phone} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold text-sm" required /></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">Dirección</label><textarea name="address" rows="3" defaultValue={selectedClient.address} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold text-sm" /></div>
+                                <button className="w-full bg-indigo-600 text-white p-5 rounded-[2.2rem] font-black shadow-xl active:scale-95 transition-all mt-4">Actualizar en Cloud</button>
+                            </form>
+                        </div>
+                    )}
+
+                    {view === 'assign_loan' && (
+                        <div className="animate-in bg-white min-h-screen">
+                            <header className="p-6 border-b flex items-center gap-4 sticky top-0 bg-white shadow-sm z-10">
+                                <button onClick={() => setView('profile')} className="p-3 text-slate-400 hover:bg-slate-50 rounded-2xl transition-colors"><Icon name="arrow-left"/></button>
+                                <h2 className="text-xl font-black text-slate-800">Nuevo Préstamo</h2>
+                            </header>
+                            <form onSubmit={assignLoan} className="p-8 space-y-6">
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">Capital Préstamo</label><input name="amount" type="number" step="any" className="w-full p-5 bg-slate-50 border rounded-2xl font-black text-2xl outline-none" required /></div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">Interés %</label><input name="interest" type="number" defaultValue="10" className="w-full p-4 bg-slate-100 rounded-2xl font-bold outline-none" /></div>
+                                    <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">Nº Cuotas</label><input name="inst" type="number" defaultValue="10" className="w-full p-4 bg-slate-100 rounded-2xl font-bold outline-none" /></div>
+                                </div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">Frecuencia de Cobro</label><select name="freq" className="w-full p-4 bg-slate-100 rounded-2xl font-bold outline-none appearance-none cursor-pointer"><option>Semanal</option><option>Diario</option><option>Quincenal</option><option>Mensual</option></select></div>
+                                <button className="w-full bg-indigo-600 text-white p-5 rounded-[2.2rem] font-black shadow-xl mt-6 active:scale-95">Activar Préstamo Cloud</button>
+                            </form>
+                        </div>
+                    )}
+
+                    {receiptData && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[200] flex items-center justify-center p-4">
+                            <div className="bg-white w-full max-w-sm rounded-[2.5rem] shadow-2xl overflow-hidden animate-in">
+                                <div ref={receiptRef} className="p-8 bg-white text-slate-800">
+                                    <div className="text-center mb-6">
+                                        <div className="w-16 h-16 bg-emerald-500 rounded-2xl flex items-center justify-center text-white mx-auto mb-4"><Icon name="check-circle-2" size={32}/></div>
+                                        <h4 className="text-xl font-black">Pago Recibido</h4>
+                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{receiptData.transaction.ref}</p>
+                                    </div>
+                                    <div className="space-y-3 border-y border-slate-100 py-6 mb-6">
+                                        <div className="flex justify-between text-sm"><span className="text-slate-400 font-bold">Cliente</span><span className="font-black">{receiptData.client.name}</span></div>
+                                        <div className="flex justify-between text-sm"><span className="text-slate-400 font-bold">Monto Pago</span><span className="font-black text-emerald-500">${receiptData.transaction.amount.toLocaleString()}</span></div>
+                                        <div className="flex justify-between text-sm"><span className="text-slate-400 font-bold">Saldo Restante</span><span className="font-black text-red-500">${receiptData.client.totalDebt.toLocaleString()}</span></div>
+                                    </div>
+                                    <p className="text-[10px] text-center text-slate-300 font-bold uppercase tracking-widest">Gracias por su pago - Connect Préstamos</p>
+                                </div>
+                                <div className="p-4 bg-slate-50 flex gap-2">
+                                    <button onClick={handleShare} disabled={isGeneratingImage} className="flex-1 bg-indigo-600 text-white py-4 rounded-2xl font-black flex items-center justify-center gap-2 active:scale-95">
+                                        {isGeneratingImage ? "Procesando..." : <><Icon name="share-2" size={18}/> Compartir</>}
+                                    </button>
+                                    <button onClick={() => setReceiptData(null)} className="p-4 bg-slate-200 text-slate-600 rounded-2xl active:scale-95"><Icon name="x"/></button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             );
         };
