@@ -645,70 +645,18 @@
                 }
             };
 
-            const handleImageUpload = (e, client) => {
+            const handleImageUpload = (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
-                setIsProcessing(true);
                 const reader = new FileReader();
                 reader.onload = async (event) => {
                     try {
-                        const base64String = event.target.result;
-                        
-                        // 1. Guardar en Firebase (App Local)
                         await db.collection('users').doc(user.uid).collection('clients').doc(selectedClientId).update({
-                            idImage: base64String
+                            idImage: event.target.result
                         });
-
-                        // 2. Respaldo Automático en GitHub (Si está configurado)
-                        if (userProfile?.githubToken && userProfile?.githubUser && userProfile?.githubRepo) {
-                            const cleanBase64 = base64String.split(',')[1]; // Remover el prefijo data:image/...
-                            const safeName = client.name.replace(/\s+/g, '_');
-                            const safePhone = client.phone.replace(/\s+/g, '');
-                            const cedula = client.cedula || 'SinID';
-                            
-                            // Formato requerido: Cedula_NombreCompleto_Telefono.jpg
-                            const fileName = `${cedula}_${safeName}_${safePhone}.jpg`;
-                            const path = `documentos/${fileName}`;
-                            const url = `https://api.github.com/repos/${userProfile.githubUser}/${userProfile.githubRepo}/contents/${path}`;
-
-                            // Petición a la API de GitHub para subir el archivo
-                            const response = await fetch(url, {
-                                method: 'PUT',
-                                headers: {
-                                    'Authorization': `token ${userProfile.githubToken}`,
-                                    'Content-Type': 'application/json',
-                                },
-                                body: JSON.stringify({
-                                    message: `Respaldo de documento: ${fileName}`,
-                                    content: cleanBase64
-                                })
-                            });
-
-                            if (!response.ok) {
-                                const errorData = await response.json();
-                                // Si da error 422 suele ser que el archivo ya existe. Le agregamos un timestamp para no perder la foto.
-                                if (response.status === 422) {
-                                    const uniqueUrl = `https://api.github.com/repos/${userProfile.githubUser}/${userProfile.githubRepo}/contents/documentos/${Date.now()}_${fileName}`;
-                                    await fetch(uniqueUrl, {
-                                        method: 'PUT',
-                                        headers: { 'Authorization': `token ${userProfile.githubToken}`, 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ message: `Actualización documento: ${fileName}`, content: cleanBase64 })
-                                    });
-                                    showNotify("Foto subida a la App y actualizada en GitHub 🚀");
-                                } else {
-                                    console.error("GitHub Error:", errorData);
-                                    showNotify("Foto guardada en App, pero falló GitHub. Revisa credenciales.");
-                                }
-                            } else {
-                                showNotify("Foto guardada y respaldada en GitHub 🚀");
-                            }
-                        } else {
-                            showNotify("Foto guardada (Configura GitHub en Ajustes para respaldo)");
-                        }
+                        showNotify("Documento subido con éxito");
                     } catch (err) {
-                        showNotify("Error al procesar el documento");
-                    } finally {
-                        setIsProcessing(false);
+                        showNotify("Error al subir documento");
                     }
                 };
                 reader.readAsDataURL(file);
@@ -1600,17 +1548,14 @@
                                             <div className="w-full h-full bg-indigo-600 rounded-[2.2rem] flex items-center justify-center text-white text-4xl font-black shadow-xl">{selectedClient.name[0]}</div>
                                         )}
                                         <label className="absolute -bottom-2 -right-2 w-10 h-10 bg-emerald-500 text-white rounded-xl flex items-center justify-center shadow-lg cursor-pointer hover:scale-105 active:scale-95 transition-transform">
-                                            {isProcessing ? <span className="animate-pulse font-bold text-white text-xs">...</span> : <Icon name="camera" size={18} />}
-                                            <input type="file" accept="image/*" className="hidden" onChange={(e) => handleImageUpload(e, selectedClient)} disabled={isProcessing} />
+                                            <Icon name="camera" size={18} />
+                                            <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
                                         </label>
                                         {selectedClient.idImage && (
                                             <button onClick={() => {
                                                 const a = document.createElement('a');
                                                 a.href = selectedClient.idImage;
-                                                const safeName = selectedClient.name.replace(/\s+/g, '_');
-                                                const safePhone = selectedClient.phone.replace(/\s+/g, '');
-                                                const cedula = selectedClient.cedula || 'SinID';
-                                                a.download = `${cedula}_${safeName}_${safePhone}.jpg`;
+                                                a.download = `Documento_${selectedClient.name}.jpg`;
                                                 a.click();
                                             }} className="absolute -top-2 -right-2 w-8 h-8 bg-slate-800 text-white rounded-xl flex items-center justify-center shadow-lg cursor-pointer hover:scale-105 active:scale-95 transition-transform">
                                                 <Icon name="download" size={14} />
@@ -1684,48 +1629,31 @@
                         </div>
                     )}
 
-                    {view === 'settings' && (
+                    {view === 'edit_client' && selectedClient && (
                         <div className="animate-in bg-white min-h-screen">
-                                    <div className="bg-slate-50 p-6 rounded-[2.5rem] border border-slate-100 space-y-4">
-                                        <div className="flex justify-between items-center pt-2 pb-2">
-                                            <span className="font-bold text-slate-700 text-sm">Modo Oscuro</span>
-                                            <div className="w-12 h-6 rounded-full relative cursor-pointer transition-colors"
-                                                 style={{ backgroundColor: userProfile?.darkMode ? '#4f46e5' : '#cbd5e1' }}
-                                                 onClick={() => db.collection('users').doc(user.uid).set({ darkMode: !userProfile?.darkMode }, { merge: true })}>
-                                                 <div className="w-4 h-4 bg-white rounded-full absolute top-1 transition-all"
-                                                      style={{ left: userProfile?.darkMode ? '1.75rem' : '0.25rem' }}></div>
-                                            </div>
+                            <header className="p-6 border-b flex items-center gap-4 bg-white sticky top-0 z-10 shadow-sm"><button onClick={() => setView('profile')} className="p-3 text-slate-400"><Icon name="arrow-left"/></button><h2 className="heading-font text-xl font-black text-slate-800">Editar Cliente</h2></header>
+                            <form onSubmit={updateClient} className="p-8 space-y-5">
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Nombre</label><input name="name" type="text" defaultValue={selectedClient.name} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold focus:border-indigo-500 outline-none" required /></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Cédula / ID</label><input name="cedula" type="text" defaultValue={selectedClient.cedula} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold focus:border-indigo-500 outline-none" /></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">WhatsApp / Teléfono</label><input name="phone" type="tel" defaultValue={selectedClient.phone} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold focus:border-indigo-500 outline-none" required /></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Correo Electrónico</label><input name="email" type="email" defaultValue={selectedClient.email} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold focus:border-indigo-500 outline-none" /></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Dirección</label><textarea name="address" rows="3" defaultValue={selectedClient.address} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold resize-none focus:border-indigo-500 outline-none" /></div>
+                                <button className="w-full bg-indigo-600 text-white p-5 rounded-[2.2rem] font-black shadow-xl mt-4 active:scale-95 transition-all">Guardar Cambios</button>
+                            </form>
+                        </div>
+                    )}
+
+                    {isTransacting && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[150] flex items-end sm:items-center justify-center p-4">
+                            <div className="bg-white w-full max-w-md rounded-t-[2.5rem] sm:rounded-[2.5rem] p-8 shadow-2xl animate-in">
+                                <div className="flex justify-between items-center mb-6"><h3 className="heading-font text-xl font-black text-slate-800">Registrar Pago</h3><button onClick={() => setIsTransacting(false)} className="text-slate-400 p-2"><Icon name="x" /></button></div>
+                                <div className="space-y-6">
+                                    
+                                    {selectedClient.loan?.type === 'Rédito' && (
+                                        <div className="flex bg-slate-100 p-1 rounded-2xl mb-4">
+                                            <button onClick={() => setTransactionType('Interés')} className={`flex-1 py-3 rounded-xl font-black text-xs transition-all ${transactionType === 'Interés' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400'}`}>Pago de Interés</button>
+                                            <button onClick={() => setTransactionType('Capital')} className={`flex-1 py-3 rounded-xl font-black text-xs transition-all ${transactionType === 'Capital' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400'}`}>Abono a Capital</button>
                                         </div>
-                                    </div>
-                                </div>
-
-                                <div className="space-y-4 pt-4 border-t border-slate-100">
-                                    <div className="flex items-center gap-3 px-2">
-                                        <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center"><Icon name="archive" size={20}/></div>
-                                        <h4 className="font-black text-sm uppercase tracking-widest text-slate-400">Respaldo en GitHub (Fotos)</h4>
-                                    </div>
-                                    <form onSubmit={(e) => {
-                                        e.preventDefault();
-                                        db.collection('users').doc(user.uid).set({
-                                            githubToken: e.target.token.value,
-                                            githubUser: e.target.user.value,
-                                            githubRepo: e.target.repo.value
-                                        }, { merge: true });
-                                        showNotify("Credenciales de GitHub guardadas");
-                                    }} className="bg-slate-50 p-6 rounded-[2.5rem] border border-slate-100 space-y-4">
-                                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-relaxed">Las fotos se subirán automáticamente. Crea un "Personal Access Token (classic)" en tu cuenta de GitHub con permisos de <strong>"repo"</strong>.</p>
-                                        <input name="user" type="text" defaultValue={userProfile?.githubUser || ''} placeholder="Tu usuario de GitHub (Ej: miamari)" className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold text-sm outline-none focus:border-indigo-500" required />
-                                        <input name="repo" type="text" defaultValue={userProfile?.githubRepo || ''} placeholder="Nombre del Repo (Ej: fotos-clientes)" className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold text-sm outline-none focus:border-indigo-500" required />
-                                        <input name="token" type="password" defaultValue={userProfile?.githubToken || ''} placeholder="Token Clásico (ghp_...)" className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold text-sm outline-none focus:border-indigo-500" required />
-                                        <button className="w-full bg-slate-800 text-white p-4 rounded-2xl font-black shadow-lg">Conectar con GitHub</button>
-                                    </form>
-                                </div>
-
-                                <div className="space-y-4 pt-4 border-t border-slate-100">
-                                    <div className="flex items-center gap-3 px-2">
-                                        <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center"><Icon name="database" size={20}/></div>
-                                        <h4 className="font-black text-sm uppercase tracking-widest text-slate-400">Migración de Datos</h4>
-                                    </div>
                                     )}
 
                                     <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100 flex flex-col gap-3">
