@@ -203,6 +203,7 @@
             const [isGeneratingImage, setIsGeneratingImage] = useState(false);
             const [isTransacting, setIsTransacting] = useState(false);
             const [isProcessing, setIsProcessing] = useState(false); // Nuevo estado para prevenir doble click
+            const [transactionType, setTransactionType] = useState('Interés');
             const [earningsFilter, setEarningsFilter] = useState('todas');
             const [earningsSearch, setEarningsSearch] = useState('');
             const [deleteConfirm, setDeleteConfirm] = useState(null);
@@ -216,6 +217,22 @@
             // Perfil de usuario y Agenda
             const [userProfile, setUserProfile] = useState({ smsAuto: false, darkMode: false });
             const [agendaTab, setAgendaTab] = useState('hoy');
+
+            // Estado reactivo para la Vista Previa del Nuevo Préstamo
+            const [loanForm, setLoanForm] = useState({
+                amount: '',
+                loanType: 'Amortizado',
+                interestType: 'Por Cuota', // Nuevo estado agregado
+                interest: 20,
+                inst: 10,
+                freq: 'Semanal',
+                startDate: new Date().toISOString().split('T')[0]
+            });
+
+            const handleLoanFormChange = (e) => {
+                const { name, value } = e.target;
+                setLoanForm(prev => ({ ...prev, [name]: value }));
+            };
 
             // Nuevos estados para Cartera y Calculadora
             const [portfolioSearch, setPortfolioSearch] = useState('');
@@ -380,6 +397,7 @@
                     const currentPaid = client.loan?.paidInstallments || 0;
                     const instBaseAmount = client.loan?.installmentAmount || 1;
                     let currentMora = client.loan?.mora || 0;
+                    const isRedito = client.loan?.type === 'Rédito';
                     
                     let totalMoneyAvailable = num + (client.loan?.partialCredit || 0);
                     let paidMora = 0;
@@ -394,17 +412,45 @@
                         totalMoneyAvailable = 0;
                     }
 
-                    const installmentsCovered = Math.floor(totalMoneyAvailable / instBaseAmount);
-                    const surplus = totalMoneyAvailable % instBaseAmount;
-                    
-                    const newPaid = Math.min(client.loan.totalInstallments, currentPaid + installmentsCovered);
-                    const newDebt = Math.max(0, client.totalDebt - num);
-                    
+                    let installmentsCovered = 0;
+                    let surplus = 0;
+                    let newPaid = currentPaid;
+                    let newDebt = client.totalDebt;
                     let nextDate = client.loan.nextPaymentDate || formatDate(new Date());
-                    if (installmentsCovered > 0) {
-                        for(let i=0; i < installmentsCovered; i++) { 
-                            nextDate = calculateNextDate(nextDate, client.loan.frequency); 
+                    let description = '';
+
+                    if (isRedito) {
+                        if (transactionType === 'Capital') {
+                            newDebt = Math.max(0, client.totalDebt - totalMoneyAvailable);
+                            surplus = 0; 
+                            description = 'Abono a Capital';
+                        } else {
+                            installmentsCovered = Math.floor(totalMoneyAvailable / instBaseAmount);
+                            surplus = totalMoneyAvailable % instBaseAmount;
+                            newPaid = currentPaid + installmentsCovered;
+                            if (installmentsCovered > 0) {
+                                for(let i=0; i < installmentsCovered; i++) { 
+                                    nextDate = calculateNextDate(nextDate, client.loan.frequency); 
+                                }
+                            }
+                            description = installmentsCovered > 0 ? `Pago Interés (${installmentsCovered} cuotas)` : (paidMora > 0 ? 'Pago de Mora' : 'Abono parcial a interés');
                         }
+                    } else {
+                        installmentsCovered = Math.floor(totalMoneyAvailable / instBaseAmount);
+                        surplus = totalMoneyAvailable % instBaseAmount;
+                        newPaid = Math.min(client.loan.totalInstallments, currentPaid + installmentsCovered);
+                        newDebt = Math.max(0, client.totalDebt - num);
+                        if (installmentsCovered > 0) {
+                            for(let i=0; i < installmentsCovered; i++) { 
+                                nextDate = calculateNextDate(nextDate, client.loan.frequency); 
+                            }
+                        }
+                        description = installmentsCovered > 0 ? `Pago Cuota ${newPaid}/${client.loan.totalInstallments}` : (paidMora > 0 ? 'Pago de Mora' : 'Abono parcial');
+                    }
+
+                    let newInstallmentAmount = instBaseAmount;
+                    if (isRedito && transactionType === 'Capital' && newDebt > 0) {
+                        newInstallmentAmount = newDebt * (client.loan.interest / 100);
                     }
 
                     const entry = {
@@ -412,11 +458,11 @@
                         amount: num,
                         surplus: surplus,
                         date: displayDate,
-                        type: 'Pago',
-                        description: installmentsCovered > 0 ? `Pago Cuota ${newPaid}/${client.loan.totalInstallments}` : (paidMora > 0 ? 'Pago de Mora' : 'Abono parcial'),
+                        type: isRedito ? transactionType : 'Pago',
+                        description: description,
                         ref: 'REC-' + Math.floor(1000 + Math.random() * 8999),
-                        installmentStatus: `${newPaid}/${client.loan.totalInstallments}`,
-                        remainingInstallments: client.loan.totalInstallments - newPaid,
+                        installmentStatus: isRedito ? (transactionType === 'Capital' ? 'N/A' : `${installmentsCovered} Pagadas`) : `${newPaid}/${client.loan.totalInstallments}`,
+                        remainingInstallments: isRedito ? '∞' : client.loan.totalInstallments - newPaid,
                         paidMora: paidMora
                     };
 
@@ -426,11 +472,12 @@
                         'loan.paidInstallments': newPaid,
                         'loan.partialCredit': surplus,
                         'loan.nextPaymentDate': nextDate,
-                        'loan.mora': currentMora
+                        'loan.mora': currentMora,
+                        'loan.installmentAmount': newInstallmentAmount
                     });
                     
                     setReceiptData({ 
-                        client: {...client, totalDebt: newDebt, loan: {...client.loan, paidInstallments: newPaid, partialCredit: surplus, mora: currentMora}}, 
+                        client: {...client, totalDebt: newDebt, loan: {...client.loan, paidInstallments: newPaid, partialCredit: surplus, mora: currentMora, installmentAmount: newInstallmentAmount}}, 
                         transaction: entry, surplus: surplus 
                     });
                     showNotify("Pago registrado correctamente");
@@ -460,9 +507,15 @@
                 // Sacamos el pago del historial
                 const newHistory = client.history.filter(h => h.id !== payment.id);
                 
+                let amountToRestoreToDebt = payment.amount;
+                // PROTECCIÓN: Si es Rédito y se anula un pago de Interés, no se debe alterar el capital
+                if (client.loan?.type === 'Rédito' && payment.type === 'Interés') {
+                    amountToRestoreToDebt = 0; 
+                }
+
                 let updateData = {
                     history: newHistory,
-                    totalDebt: client.totalDebt + payment.amount
+                    totalDebt: client.totalDebt + amountToRestoreToDebt
                 };
 
                 // Si hay un préstamo activo, revertimos las cuotas y la fecha
@@ -592,18 +645,70 @@
                 }
             };
 
-            const handleImageUpload = (e) => {
+            const handleImageUpload = (e, client) => {
                 const file = e.target.files[0];
                 if (!file) return;
+                setIsProcessing(true);
                 const reader = new FileReader();
                 reader.onload = async (event) => {
                     try {
+                        const base64String = event.target.result;
+                        
+                        // 1. Guardar en Firebase (App Local)
                         await db.collection('users').doc(user.uid).collection('clients').doc(selectedClientId).update({
-                            idImage: event.target.result
+                            idImage: base64String
                         });
-                        showNotify("Documento subido con éxito");
+
+                        // 2. Respaldo Automático en GitHub (Si está configurado)
+                        if (userProfile?.githubToken && userProfile?.githubUser && userProfile?.githubRepo) {
+                            const cleanBase64 = base64String.split(',')[1]; // Remover el prefijo data:image/...
+                            const safeName = client.name.replace(/\s+/g, '_');
+                            const safePhone = client.phone.replace(/\s+/g, '');
+                            const cedula = client.cedula || 'SinID';
+                            
+                            // Formato requerido: Cedula_NombreCompleto_Telefono.jpg
+                            const fileName = `${cedula}_${safeName}_${safePhone}.jpg`;
+                            const path = `documentos/${fileName}`;
+                            const url = `https://api.github.com/repos/${userProfile.githubUser}/${userProfile.githubRepo}/contents/${path}`;
+
+                            // Petición a la API de GitHub para subir el archivo
+                            const response = await fetch(url, {
+                                method: 'PUT',
+                                headers: {
+                                    'Authorization': `token ${userProfile.githubToken}`,
+                                    'Content-Type': 'application/json',
+                                },
+                                body: JSON.stringify({
+                                    message: `Respaldo de documento: ${fileName}`,
+                                    content: cleanBase64
+                                })
+                            });
+
+                            if (!response.ok) {
+                                const errorData = await response.json();
+                                // Si da error 422 suele ser que el archivo ya existe. Le agregamos un timestamp para no perder la foto.
+                                if (response.status === 422) {
+                                    const uniqueUrl = `https://api.github.com/repos/${userProfile.githubUser}/${userProfile.githubRepo}/contents/documentos/${Date.now()}_${fileName}`;
+                                    await fetch(uniqueUrl, {
+                                        method: 'PUT',
+                                        headers: { 'Authorization': `token ${userProfile.githubToken}`, 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ message: `Actualización documento: ${fileName}`, content: cleanBase64 })
+                                    });
+                                    showNotify("Foto subida a la App y actualizada en GitHub 🚀");
+                                } else {
+                                    console.error("GitHub Error:", errorData);
+                                    showNotify("Foto guardada en App, pero falló GitHub. Revisa credenciales.");
+                                }
+                            } else {
+                                showNotify("Foto guardada y respaldada en GitHub 🚀");
+                            }
+                        } else {
+                            showNotify("Foto guardada (Configura GitHub en Ajustes para respaldo)");
+                        }
                     } catch (err) {
-                        showNotify("Error al subir documento");
+                        showNotify("Error al procesar el documento");
+                    } finally {
+                        setIsProcessing(false);
                     }
                 };
                 reader.readAsDataURL(file);
@@ -614,7 +719,16 @@
                 const amount = parseFloat(e.target.amount.value);
                 const interest = parseFloat(e.target.interest.value);
                 const inst = parseInt(e.target.inst.value);
-                const total = amount + (amount * (interest/100));
+                const loanType = e.target.loanType.value;
+                const interestType = e.target.interestType.value;
+                
+                // NUEVA LÓGICA DE INTERESES: 
+                // Calcula el interés de 1 sola cuota. Si elegiste "Por Cuota", lo multiplica por la cantidad de cuotas.
+                const interestAmountPerCuota = amount * (interest/100);
+                const totalInterest = interestType === 'Fijo' ? interestAmountPerCuota : interestAmountPerCuota * inst;
+                
+                const total = loanType === 'Rédito' ? amount : amount + totalInterest;
+                const installmentAmount = loanType === 'Rédito' ? interestAmountPerCuota : total / inst;
                 
                 const startDateStr = e.target.startDate.value;
                 const [y, m, d] = startDateStr.split('-');
@@ -625,12 +739,17 @@
                     totalDebt: total,
                     totalLoansTaken: currentLoansTaken + 1,
                     loan: {
+                        type: loanType,
+                        interestType: interestType,
                         amount, interest, totalToPay: total, totalInstallments: inst, paidInstallments: 0,
-                        installmentAmount: total / inst, frequency: e.target.freq.value, partialCredit: 0,
+                        installmentAmount: installmentAmount, frequency: e.target.freq.value, partialCredit: 0,
                         nextPaymentDate: firstPaymentDate, mora: 0
                     }
                 });
                 setView('profile'); showNotify("Préstamo asignado");
+                
+                // Reiniciamos el formulario al asignar con éxito
+                setLoanForm({ amount: '', loanType: 'Amortizado', interestType: 'Por Cuota', interest: 20, inst: 10, freq: 'Semanal', startDate: new Date().toISOString().split('T')[0] });
             };
 
             const applyMora = async (moraAmount) => {
@@ -644,7 +763,12 @@
                 try {
                     const currentMora = selectedClient.loan.mora || 0;
                     const newMora = currentMora + moraAmount;
-                    const newDebt = selectedClient.totalDebt + moraAmount;
+                    
+                    let newDebt = selectedClient.totalDebt;
+                    // Solo sumamos la mora a la Deuda Total (Capital) si NO es un préstamo a Rédito
+                    if (selectedClient.loan.type !== 'Rédito') {
+                        newDebt += moraAmount;
+                    }
 
                     await db.collection('users').doc(user.uid).collection('clients').doc(selectedClientId).update({
                         totalDebt: newDebt,
@@ -775,6 +899,7 @@
                 const interest = parseFloat(e.target.interest.value);
                 const inst = parseInt(e.target.inst.value);
                 const freq = e.target.freq.value;
+                const interestType = e.target.interestType.value;
                 const startDateStr = e.target.startDate.value;
                 const clientName = e.target.clientName?.value || "Cliente";
 
@@ -782,7 +907,9 @@
                 const [y, m, d] = startDateStr.split('-');
                 let currentDate = `${d}/${m}/${y}`; 
 
-                const total = amount + (amount * (interest/100));
+                const interestAmountPerCuota = amount * (interest/100);
+                const totalInterest = interestType === 'Fijo' ? interestAmountPerCuota : interestAmountPerCuota * inst;
+                const total = amount + totalInterest;
                 const installmentAmount = total / inst;
 
                 const schedule = [];
@@ -791,7 +918,7 @@
                     schedule.push({ number: i, date: currentDate, amount: installmentAmount });
                 }
 
-                setCalcResults({ amount, interest, total, inst, freq, installmentAmount, schedule, clientName });
+                setCalcResults({ amount, interest, total, inst, freq, installmentAmount, schedule, clientName, interestType });
             };
 
             const handleCompactCalculate = (e) => {
@@ -800,12 +927,15 @@
                 const interest = parseFloat(e.target.interest.value);
                 const inst = parseInt(e.target.inst.value);
                 const freq = e.target.freq.value;
+                const interestType = e.target.interestType.value;
                 const clientName = e.target.clientName?.value || "Cliente";
 
-                const total = amount + (amount * (interest/100));
+                const interestAmountPerCuota = amount * (interest/100);
+                const totalInterest = interestType === 'Fijo' ? interestAmountPerCuota : interestAmountPerCuota * inst;
+                const total = amount + totalInterest;
                 const installmentAmount = total / inst;
 
-                setCompactCalcResults({ amount, interest, total, inst, freq, installmentAmount, clientName });
+                setCompactCalcResults({ amount, interest, total, inst, freq, installmentAmount, clientName, interestType });
             };
 
             const handleCapacity = (e) => {
@@ -1470,14 +1600,17 @@
                                             <div className="w-full h-full bg-indigo-600 rounded-[2.2rem] flex items-center justify-center text-white text-4xl font-black shadow-xl">{selectedClient.name[0]}</div>
                                         )}
                                         <label className="absolute -bottom-2 -right-2 w-10 h-10 bg-emerald-500 text-white rounded-xl flex items-center justify-center shadow-lg cursor-pointer hover:scale-105 active:scale-95 transition-transform">
-                                            <Icon name="camera" size={18} />
-                                            <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+                                            {isProcessing ? <span className="animate-pulse font-bold text-white text-xs">...</span> : <Icon name="camera" size={18} />}
+                                            <input type="file" accept="image/*" className="hidden" onChange={(e) => handleImageUpload(e, selectedClient)} disabled={isProcessing} />
                                         </label>
                                         {selectedClient.idImage && (
                                             <button onClick={() => {
                                                 const a = document.createElement('a');
                                                 a.href = selectedClient.idImage;
-                                                a.download = `Documento_${selectedClient.name}.jpg`;
+                                                const safeName = selectedClient.name.replace(/\s+/g, '_');
+                                                const safePhone = selectedClient.phone.replace(/\s+/g, '');
+                                                const cedula = selectedClient.cedula || 'SinID';
+                                                a.download = `${cedula}_${safeName}_${safePhone}.jpg`;
                                                 a.click();
                                             }} className="absolute -top-2 -right-2 w-8 h-8 bg-slate-800 text-white rounded-xl flex items-center justify-center shadow-lg cursor-pointer hover:scale-105 active:scale-95 transition-transform">
                                                 <Icon name="download" size={14} />
@@ -1520,7 +1653,7 @@
                                                         setMoraConfirm(true); 
                                                     }} className="p-4 bg-red-50 text-red-500 rounded-[1.5rem] flex items-center justify-center active:scale-95 transition-transform flex-1 font-black text-xs uppercase"><Icon name="alert-triangle" size={16} className="mr-2"/> Mora</button>
                                                 </div>
-                                                <button onClick={() => setIsTransacting(true)} className="py-5 px-8 bg-indigo-600 text-white rounded-[1.8rem] font-black text-sm uppercase tracking-widest w-full active:scale-95 transition-transform mt-2">Cobrar Cuota</button>
+                                                <button onClick={() => { setTransactionType('Interés'); setIsTransacting(true); }} className="py-5 px-8 bg-indigo-600 text-white rounded-[1.8rem] font-black text-sm uppercase tracking-widest w-full active:scale-95 transition-transform mt-2">Cobrar Cuota</button>
                                             </>
                                         ) : (
                                             <button onClick={() => setView('assign_loan')} className="w-full py-5 bg-indigo-600 text-white rounded-[1.8rem] font-black flex items-center justify-center gap-3 active:scale-95 transition-transform"><Icon name="trending-up" size={20} /> Asignar Nuevo Préstamo</button>
@@ -1551,29 +1684,54 @@
                         </div>
                     )}
 
-                    {view === 'edit_client' && selectedClient && (
+                    {view === 'settings' && (
                         <div className="animate-in bg-white min-h-screen">
-                            <header className="p-6 border-b flex items-center gap-4 bg-white sticky top-0 z-10 shadow-sm"><button onClick={() => setView('profile')} className="p-3 text-slate-400"><Icon name="arrow-left"/></button><h2 className="heading-font text-xl font-black text-slate-800">Editar Cliente</h2></header>
-                            <form onSubmit={updateClient} className="p-8 space-y-5">
-                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Nombre</label><input name="name" type="text" defaultValue={selectedClient.name} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold focus:border-indigo-500 outline-none" required /></div>
-                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Cédula / ID</label><input name="cedula" type="text" defaultValue={selectedClient.cedula} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold focus:border-indigo-500 outline-none" /></div>
-                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">WhatsApp / Teléfono</label><input name="phone" type="tel" defaultValue={selectedClient.phone} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold focus:border-indigo-500 outline-none" required /></div>
-                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Correo Electrónico</label><input name="email" type="email" defaultValue={selectedClient.email} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold focus:border-indigo-500 outline-none" /></div>
-                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Dirección</label><textarea name="address" rows="3" defaultValue={selectedClient.address} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold resize-none focus:border-indigo-500 outline-none" /></div>
-                                <button className="w-full bg-indigo-600 text-white p-5 rounded-[2.2rem] font-black shadow-xl mt-4 active:scale-95 transition-all">Guardar Cambios</button>
-                            </form>
-                        </div>
-                    )}
+                                    <div className="bg-slate-50 p-6 rounded-[2.5rem] border border-slate-100 space-y-4">
+                                        <div className="flex justify-between items-center pt-2 pb-2">
+                                            <span className="font-bold text-slate-700 text-sm">Modo Oscuro</span>
+                                            <div className="w-12 h-6 rounded-full relative cursor-pointer transition-colors"
+                                                 style={{ backgroundColor: userProfile?.darkMode ? '#4f46e5' : '#cbd5e1' }}
+                                                 onClick={() => db.collection('users').doc(user.uid).set({ darkMode: !userProfile?.darkMode }, { merge: true })}>
+                                                 <div className="w-4 h-4 bg-white rounded-full absolute top-1 transition-all"
+                                                      style={{ left: userProfile?.darkMode ? '1.75rem' : '0.25rem' }}></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
 
-                    {isTransacting && (
-                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[150] flex items-end sm:items-center justify-center p-4">
-                            <div className="bg-white w-full max-w-md rounded-t-[2.5rem] sm:rounded-[2.5rem] p-8 shadow-2xl animate-in">
-                                <div className="flex justify-between items-center mb-6"><h3 className="heading-font text-xl font-black text-slate-800">Registrar Pago</h3><button onClick={() => setIsTransacting(false)} className="text-slate-400 p-2"><Icon name="x" /></button></div>
-                                <div className="space-y-6">
+                                <div className="space-y-4 pt-4 border-t border-slate-100">
+                                    <div className="flex items-center gap-3 px-2">
+                                        <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center"><Icon name="archive" size={20}/></div>
+                                        <h4 className="font-black text-sm uppercase tracking-widest text-slate-400">Respaldo en GitHub (Fotos)</h4>
+                                    </div>
+                                    <form onSubmit={(e) => {
+                                        e.preventDefault();
+                                        db.collection('users').doc(user.uid).set({
+                                            githubToken: e.target.token.value,
+                                            githubUser: e.target.user.value,
+                                            githubRepo: e.target.repo.value
+                                        }, { merge: true });
+                                        showNotify("Credenciales de GitHub guardadas");
+                                    }} className="bg-slate-50 p-6 rounded-[2.5rem] border border-slate-100 space-y-4">
+                                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-relaxed">Las fotos se subirán automáticamente. Crea un "Personal Access Token (classic)" en tu cuenta de GitHub con permisos de <strong>"repo"</strong>.</p>
+                                        <input name="user" type="text" defaultValue={userProfile?.githubUser || ''} placeholder="Tu usuario de GitHub (Ej: miamari)" className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold text-sm outline-none focus:border-indigo-500" required />
+                                        <input name="repo" type="text" defaultValue={userProfile?.githubRepo || ''} placeholder="Nombre del Repo (Ej: fotos-clientes)" className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold text-sm outline-none focus:border-indigo-500" required />
+                                        <input name="token" type="password" defaultValue={userProfile?.githubToken || ''} placeholder="Token Clásico (ghp_...)" className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold text-sm outline-none focus:border-indigo-500" required />
+                                        <button className="w-full bg-slate-800 text-white p-4 rounded-2xl font-black shadow-lg">Conectar con GitHub</button>
+                                    </form>
+                                </div>
+
+                                <div className="space-y-4 pt-4 border-t border-slate-100">
+                                    <div className="flex items-center gap-3 px-2">
+                                        <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center"><Icon name="database" size={20}/></div>
+                                        <h4 className="font-black text-sm uppercase tracking-widest text-slate-400">Migración de Datos</h4>
+                                    </div>
+                                    )}
+
                                     <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100 flex flex-col gap-3">
                                         <div className="flex justify-between items-center">
-                                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Cuota Base</p>
-                                            <p className="text-lg font-black text-slate-700">RD${Math.round(selectedClient.loan?.installmentAmount).toLocaleString()}</p>
+                                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">{selectedClient.loan?.type === 'Rédito' && transactionType === 'Capital' ? 'Deuda Actual' : 'Cuota Base'}</p>
+                                            <p className="text-lg font-black text-slate-700">RD${Math.round(selectedClient.loan?.type === 'Rédito' && transactionType === 'Capital' ? selectedClient.totalDebt : selectedClient.loan?.installmentAmount).toLocaleString()}</p>
                                         </div>
                                         {(selectedClient.loan?.partialCredit > 0) && (
                                             <div className="flex justify-between items-center">
@@ -1588,8 +1746,8 @@
                                             </div>
                                         )}
                                         <div className="flex justify-between items-center pt-2 border-t border-slate-200">
-                                            <p className="text-[11px] font-black text-slate-800 uppercase tracking-widest mb-1">Total Sugerido</p>
-                                            <p className="text-xl font-black text-emerald-600">RD${Math.round((selectedClient.loan?.installmentAmount - (selectedClient.loan?.partialCredit || 0)) + (selectedClient.loan?.mora || 0)).toLocaleString()}</p>
+                                            <p className="text-[11px] font-black text-slate-800 uppercase tracking-widest mb-1">{selectedClient.loan?.type === 'Rédito' && transactionType === 'Capital' ? 'Total Restante' : 'Total Sugerido'}</p>
+                                            <p className="text-xl font-black text-emerald-600">RD${Math.round((selectedClient.loan?.type === 'Rédito' && transactionType === 'Capital' ? selectedClient.totalDebt : (selectedClient.loan?.installmentAmount - (selectedClient.loan?.partialCredit || 0))) + (selectedClient.loan?.mora || 0)).toLocaleString()}</p>
                                         </div>
                                     </div>
                                     
@@ -1600,10 +1758,10 @@
                                         </div>
                                         <div className="space-y-2 text-center">
                                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Recibido</label>
-                                            <input id="inputAmount" type="number" defaultValue={Math.round((selectedClient.loan?.installmentAmount - (selectedClient.loan?.partialCredit || 0)) + (selectedClient.loan?.mora || 0))} className="w-full p-4 bg-slate-50 border rounded-2xl font-black text-center text-xl focus:border-indigo-500 outline-none text-indigo-600" />
+                                            <input id="inputAmount" type="number" defaultValue={Math.round((selectedClient.loan?.type === 'Rédito' && transactionType === 'Capital' ? 0 : (selectedClient.loan?.installmentAmount - (selectedClient.loan?.partialCredit || 0))) + (selectedClient.loan?.mora || 0))} className="w-full p-4 bg-slate-50 border rounded-2xl font-black text-center text-xl focus:border-indigo-500 outline-none text-indigo-600" />
                                         </div>
                                     </div>
-                                    <p className="text-[9px] text-slate-400 font-bold uppercase tracking-tighter text-center">El excedente se abonará a la próxima cuota</p>
+                                    <p className="text-[9px] text-slate-400 font-bold uppercase tracking-tighter text-center">{selectedClient.loan?.type === 'Rédito' && transactionType === 'Capital' ? 'Este abono reduce la deuda total' : 'El excedente se abonará a la próxima cuota'}</p>
                                     
                                     <button disabled={isProcessing} onClick={() => recordTransaction(selectedClientId, document.getElementById('inputAmount').value, document.getElementById('inputDate').value)} className="w-full bg-emerald-500 text-white p-5 rounded-[2rem] font-black text-lg shadow-xl active:scale-95 transition-all disabled:opacity-50">
                                         {isProcessing ? 'Procesando...' : 'Confirmar en Nube'}
@@ -1664,11 +1822,24 @@
                                     </div>
                                     <div className="space-y-4 border-y border-slate-100 py-6 mb-6">
                                         <div className="flex justify-between text-sm"><span className="text-slate-400 font-bold">Cliente</span><span className="font-black text-slate-800">{receiptData.client.name}</span></div>
-                                        <div className="flex justify-between text-sm"><span className="text-slate-400 font-bold">Cuota Pagada</span><span className="font-black text-indigo-600">{receiptData.transaction.installmentStatus}</span></div>
-                                        <div className="flex justify-between text-sm"><span className="text-slate-400 font-bold">Restantes</span><span className="font-black text-slate-600">{receiptData.transaction.remainingInstallments}</span></div>
+                                        
+                                        {receiptData.client.loan?.type === 'Rédito' ? (
+                                            <>
+                                                <div className="flex justify-between text-sm"><span className="text-slate-400 font-bold">Modalidad</span><span className="font-black text-slate-600">A Rédito</span></div>
+                                                <div className="flex justify-between text-sm"><span className="text-slate-400 font-bold">Concepto</span><span className="font-black text-indigo-600">{receiptData.transaction.description}</span></div>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <div className="flex justify-between text-sm"><span className="text-slate-400 font-bold">Cuota Pagada</span><span className="font-black text-indigo-600">{receiptData.transaction.installmentStatus}</span></div>
+                                                <div className="flex justify-between text-sm"><span className="text-slate-400 font-bold">Restantes</span><span className="font-black text-slate-600">{receiptData.transaction.remainingInstallments}</span></div>
+                                            </>
+                                        )}
+
                                         <div className="pt-2 flex justify-between text-sm"><span className="text-slate-400 font-bold">Monto Recibido</span><span className="font-black text-emerald-500 text-lg">${receiptData.transaction.amount.toLocaleString()}</span></div>
+                                        
                                         {receiptData.surplus > 0 && <div className="bg-indigo-50 p-3 rounded-xl border border-indigo-100 flex justify-between items-center"><span className="text-[10px] font-black text-indigo-600 uppercase tracking-widest">Abono Próx. Cuota</span><span className="font-black text-indigo-600 text-sm">${receiptData.surplus.toLocaleString()}</span></div>}
-                                        <div className="flex justify-between text-sm pt-2 border-t border-dashed border-slate-200"><span className="text-slate-400 font-bold">Saldo Pendiente</span><span className="font-black text-red-500">${receiptData.client.totalDebt.toLocaleString()}</span></div>
+                                        
+                                        <div className="flex justify-between text-sm pt-2 border-t border-dashed border-slate-200"><span className="text-slate-400 font-bold">{receiptData.client.loan?.type === 'Rédito' ? 'Capital Pendiente' : 'Saldo Pendiente'}</span><span className="font-black text-red-500">${receiptData.client.totalDebt.toLocaleString()}</span></div>
                                     </div>
                                     <div className="text-center text-[9px] text-slate-400 font-bold uppercase tracking-widest">{receiptData.transaction.date}</div>
                                 </div>
@@ -1700,13 +1871,41 @@
                         <div className="animate-in bg-white min-h-screen">
                             <header className="p-6 border-b flex items-center gap-4 sticky top-0 bg-white shadow-sm z-10"><button onClick={() => setView('profile')} className="p-3 text-slate-400"><Icon name="arrow-left"/></button><h2 className="heading-font text-xl font-black text-slate-800 tracking-tighter">Nuevo Préstamo</h2></header>
                             <form onSubmit={assignLoan} className="p-8 space-y-6">
-                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Monto a Prestar</label><input name="amount" type="number" step="any" className="w-full p-5 bg-slate-50 border border-slate-200 rounded-2xl font-black text-center text-3xl outline-none focus:border-indigo-500 text-indigo-600" required /></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Monto a Prestar</label><input name="amount" type="number" step="any" value={loanForm.amount} onChange={handleLoanFormChange} className="w-full p-5 bg-slate-50 border border-slate-200 rounded-2xl font-black text-center text-3xl outline-none focus:border-indigo-500 text-indigo-600" required /></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Modalidad</label><select name="loanType" value={loanForm.loanType} onChange={handleLoanFormChange} className="w-full p-4 bg-purple-50 text-purple-700 border border-purple-100 rounded-2xl font-bold appearance-none cursor-pointer focus:border-purple-500 outline-none"><option value="Amortizado">Amortizado Normal</option><option value="Rédito">A Rédito (Solo Interés)</option></select></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Cálculo de Interés</label><select name="interestType" value={loanForm.interestType} onChange={handleLoanFormChange} className="w-full p-4 bg-slate-100 border rounded-2xl font-bold appearance-none cursor-pointer focus:border-indigo-500 outline-none"><option value="Por Cuota">Por Cuota (Se suma en cada pago)</option><option value="Fijo">Fijo (1 sola vez al monto)</option></select></div>
                                 <div className="grid grid-cols-2 gap-4">
-                                    <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Interés %</label><input name="interest" type="number" defaultValue="20" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold focus:border-indigo-500 outline-none" required /></div>
-                                    <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">No. Cuotas</label><input name="inst" type="number" defaultValue="10" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold focus:border-indigo-500 outline-none" required /></div>
+                                    <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Interés %</label><input name="interest" type="number" value={loanForm.interest} onChange={handleLoanFormChange} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold focus:border-indigo-500 outline-none" required /></div>
+                                    <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">No. Cuotas</label><input name="inst" type="number" value={loanForm.inst} onChange={handleLoanFormChange} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold focus:border-indigo-500 outline-none" required /></div>
                                 </div>
-                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Frecuencia</label><select name="freq" className="w-full p-4 bg-slate-100 border rounded-2xl font-bold appearance-none cursor-pointer focus:border-indigo-500 outline-none"><option>Semanal</option><option>Diario</option><option>Quincenal</option><option>Mensual</option></select></div>
-                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Fecha de Inicio de Pago</label><input name="startDate" type="date" defaultValue={new Date().toISOString().split('T')[0]} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold focus:border-indigo-500 outline-none text-slate-600" required/></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Frecuencia</label><select name="freq" value={loanForm.freq} onChange={handleLoanFormChange} className="w-full p-4 bg-slate-100 border rounded-2xl font-bold appearance-none cursor-pointer focus:border-indigo-500 outline-none"><option>Semanal</option><option>Diario</option><option>Quincenal</option><option>Mensual</option></select></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Fecha de Inicio de Pago</label><input name="startDate" type="date" value={loanForm.startDate} onChange={handleLoanFormChange} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold focus:border-indigo-500 outline-none text-slate-600" required/></div>
+                                
+                                {parseFloat(loanForm.amount) > 0 && (() => {
+                                    const amt = parseFloat(loanForm.amount);
+                                    const intr = parseFloat(loanForm.interest) / 100;
+                                    const cuotas = parseInt(loanForm.inst) || 1;
+                                    const interestPerCuota = amt * intr;
+                                    const totalInterest = loanForm.interestType === 'Fijo' ? interestPerCuota : interestPerCuota * cuotas;
+                                    const totalToPay = loanForm.loanType === 'Rédito' ? amt : amt + totalInterest;
+                                    const cuota = loanForm.loanType === 'Rédito' ? interestPerCuota : totalToPay / cuotas;
+
+                                    return (
+                                        <div className="bg-indigo-50 p-6 rounded-[2rem] border border-indigo-100 flex flex-col gap-3 mt-6 animate-in">
+                                            <h4 className="text-[10px] font-black text-indigo-400 uppercase tracking-widest text-center mb-2">Vista Previa de Cuotas</h4>
+                                            <div className="flex justify-between items-center">
+                                                <span className="text-sm font-bold text-slate-600">Total a Pagar:</span>
+                                                <span className="text-lg font-black text-red-500">RD${Math.round(totalToPay).toLocaleString()}</span>
+                                            </div>
+                                            <div className="flex justify-between items-center pt-3 border-t border-indigo-200/60">
+                                                <span className="text-sm font-bold text-slate-600">Cuota ({loanForm.freq}):</span>
+                                                <span className="text-xl font-black text-emerald-600">RD${Math.round(cuota).toLocaleString()}</span>
+                                            </div>
+                                            {loanForm.loanType === 'Rédito' && <p className="text-[9px] text-indigo-400 font-bold uppercase tracking-widest text-center mt-2">Modalidad a rédito: El capital se mantiene intacto.</p>}
+                                        </div>
+                                    );
+                                })()}
+
                                 <button className="w-full bg-indigo-600 text-white p-5 rounded-[2.2rem] font-black shadow-xl mt-6 uppercase tracking-widest text-sm active:scale-95 transition-all">Activar Préstamo Cloud</button>
                             </form>
                         </div>
@@ -1727,6 +1926,7 @@
                                     <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">No. Cuotas</label><input name="inst" type="number" defaultValue="10" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold focus:border-indigo-500 outline-none" required/></div>
                                 </div>
                                 <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Frecuencia</label><select name="freq" className="w-full p-4 bg-slate-100 border rounded-2xl font-bold appearance-none cursor-pointer focus:border-indigo-500 outline-none"><option>Semanal</option><option>Diario</option><option>Quincenal</option><option>Mensual</option></select></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Cálculo de Interés</label><select name="interestType" className="w-full p-4 bg-slate-100 border rounded-2xl font-bold appearance-none cursor-pointer focus:border-indigo-500 outline-none"><option value="Por Cuota">Por Cuota (Se suma en cada pago)</option><option value="Fijo">Fijo (1 sola vez al monto)</option></select></div>
                                 <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Fecha de Inicio</label><input name="startDate" type="date" defaultValue={new Date().toISOString().split('T')[0]} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold focus:border-indigo-500 outline-none text-slate-600" required/></div>
                                 <button className="w-full bg-indigo-600 text-white p-5 rounded-[2.2rem] font-black shadow-xl mt-4 uppercase tracking-widest text-sm active:scale-95 transition-all">Generar Cotización</button>
                             </form>
@@ -1752,7 +1952,7 @@
                                     
                                     <div className="space-y-4 border-b border-slate-100 pb-6 mb-6">
                                         <div className="flex justify-between text-sm"><span className="text-slate-400 font-bold">Monto Solicitado</span><span className="font-black text-slate-800">${calcResults.amount.toLocaleString()}</span></div>
-                                        <div className="flex justify-between text-sm"><span className="text-slate-400 font-bold">Interés</span><span className="font-black text-slate-800">{calcResults.interest}%</span></div>
+                                        <div className="flex justify-between text-sm"><span className="text-slate-400 font-bold">Interés</span><span className="font-black text-slate-800">{calcResults.interest}% ({calcResults.interestType})</span></div>
                                         <div className="flex justify-between text-sm"><span className="text-slate-400 font-bold">Plan de Pago</span><span className="font-black text-slate-800">{calcResults.inst} Cuotas ({calcResults.freq})</span></div>
                                         <div className="flex justify-between text-sm pt-2 border-t border-dashed border-slate-200"><span className="text-slate-400 font-black uppercase tracking-widest text-[11px]">Total a Pagar</span><span className="font-black text-red-500 text-lg">${calcResults.total.toLocaleString()}</span></div>
                                     </div>
@@ -1795,6 +1995,7 @@
                                     <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">No. Cuotas</label><input name="inst" type="number" defaultValue="10" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold focus:border-indigo-500 outline-none" required/></div>
                                 </div>
                                 <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Frecuencia</label><select name="freq" className="w-full p-4 bg-slate-100 border rounded-2xl font-bold appearance-none cursor-pointer focus:border-indigo-500 outline-none"><option>Semanal</option><option>Diario</option><option>Quincenal</option><option>Mensual</option></select></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Cálculo de Interés</label><select name="interestType" className="w-full p-4 bg-slate-100 border rounded-2xl font-bold appearance-none cursor-pointer focus:border-indigo-500 outline-none"><option value="Por Cuota">Por Cuota (Se suma en cada pago)</option><option value="Fijo">Fijo (1 sola vez al monto)</option></select></div>
                                 <button className="w-full bg-indigo-600 text-white p-5 rounded-[2.2rem] font-black shadow-xl mt-4 uppercase tracking-widest text-sm active:scale-95 transition-all">Generar Resumen Visual</button>
                             </form>
                         </div>
