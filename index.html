@@ -1327,7 +1327,9 @@
                                 <div className="space-y-1.5">
                                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Asignar a Ruta/Sector</label>
                                     <select name="route" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500 appearance-none cursor-pointer text-indigo-700">
-                                        {routesList.map((r, i) => <option key={i} value={r}>{r}</option>)}
+                                        {userProfile?.role === 'cobrador' && userProfile?.assignedRoute !== 'Todas' 
+                                            ? <option value={userProfile?.assignedRoute}>{userProfile?.assignedRoute}</option>
+                                            : routesList.map((r, i) => <option key={i} value={r}>{r}</option>)}
                                     </select>
                                 </div>
 
@@ -1350,7 +1352,9 @@
                                 <div className="space-y-1.5">
                                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Asignar a Ruta/Sector</label>
                                     <select name="route" defaultValue={selectedClient.route || 'General'} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500 appearance-none cursor-pointer text-indigo-700">
-                                        {routesList.map((r, i) => <option key={i} value={r}>{r}</option>)}
+                                        {userProfile?.role === 'cobrador' && userProfile?.assignedRoute !== 'Todas' 
+                                            ? <option value={userProfile?.assignedRoute}>{userProfile?.assignedRoute}</option>
+                                            : routesList.map((r, i) => <option key={i} value={r}>{r}</option>)}
                                     </select>
                                 </div>
                                 <div className="grid grid-cols-2 gap-4">
