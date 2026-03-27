@@ -114,7 +114,7 @@
         const LogoSVG = ({ className = "w-12 h-12", color = "currentColor" }) => {
             const [imgError, setImgError] = useState(false);
             if (LOGO_URL && !imgError) {
-                return <img src={LOGO_URL} className={`${className} object-contain`} alt="Connect Logo" onError={() => setImgError(true)} />;
+                return <img src={LOGO_URL} className={`${className} object-contain`} style={{ imageRendering: 'high-quality' }} alt="Connect Logo" onError={() => setImgError(true)} />;
             }
             return (
                 <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
@@ -197,10 +197,7 @@
             
             const [isOnline, setIsOnline] = useState(navigator.onLine);
             const [portfolioSort, setPortfolioSort] = useState('name');
-            const [pinModal, setPinModal] = useState(false);
-            const [pinInput, setPinInput] = useState('');
-            const [changePinModal, setChangePinModal] = useState(false);
-            const [newPinInput, setNewPinInput] = useState('');
+            const [wipePassword, setWipePassword] = useState('');
             const [passwordModal, setPasswordModal] = useState(false);
             const [newPassword, setNewPassword] = useState('');
             const [newClientImage, setNewClientImage] = useState(null);
@@ -212,6 +209,8 @@
             const [newRouteInput, setNewRouteInput] = useState('');
             const [cobradorModal, setCobradorModal] = useState(false);
             const [cobradorForm, setCobradorForm] = useState({ name: '', email: '', pass: '', route: 'Todas' });
+            const [editCobradorModal, setEditCobradorModal] = useState(false);
+            const [editingCobrador, setEditingCobrador] = useState({ id: '', name: '', route: 'Todas' });
             
             // Estado para el formulario de Nuevo Préstamo
             const [loanForm, setLoanForm] = useState({
@@ -232,6 +231,33 @@
                     // Los ajustes globales siempre van al documento del Admin (dueño)
                     if(adminUid) await db.collection('users').doc(adminUid).set({ [field]: value }, { merge: true });
                 } catch (e) { console.error("Error al actualizar ajuste", e); }
+            };
+
+            // Función para comprimir imágenes y ahorrar espacio en base de datos
+            const compressImage = (file) => {
+                return new Promise((resolve) => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        const img = new Image();
+                        img.onload = () => {
+                            const canvas = document.createElement('canvas');
+                            let width = img.width;
+                            let height = img.height;
+                            const MAX_WIDTH = 800; // Redimensionar si es muy grande
+                            if (width > MAX_WIDTH) {
+                                height = Math.round((height * MAX_WIDTH) / width);
+                                width = MAX_WIDTH;
+                            }
+                            canvas.width = width;
+                            canvas.height = height;
+                            const ctx = canvas.getContext('2d');
+                            ctx.drawImage(img, 0, 0, width, height);
+                            resolve(canvas.toDataURL('image/jpeg', 0.6)); // Calidad del 60%
+                        };
+                        img.src = e.target.result;
+                    };
+                    reader.readAsDataURL(file);
+                });
             };
 
             // Filtrar clientes si el usuario logueado es un cobrador
@@ -564,17 +590,26 @@
                 reader.readAsText(file);
             };
 
-            const handleWipeSystem = async () => {
+            const handleWipeSystem = async (e) => {
+                e.preventDefault();
                 if(isProcessing) return;
                 setIsProcessing(true);
                 try {
+                    // Validar contraseña antes de borrar el sistema
+                    const credential = firebase.auth.EmailAuthProvider.credential(user.email, wipePassword);
+                    await auth.currentUser.reauthenticateWithCredential(credential);
+
                     const batch = db.batch();
                     for(let c of clients) { batch.update(db.collection('users').doc(adminUid).collection('clients').doc(c.id), { history: [] }); }
                     for(let g of storedGains) { batch.delete(db.collection('users').doc(adminUid).collection('gains').doc(g.id)); }
                     await batch.commit();
                     await db.collection('users').doc(adminUid).set({ historicalGains: 0 }, { merge: true });
-                    setWipeSystemConfirm(false); showNotify("¡Sistema limpiado por completo!");
-                } catch (e) { showNotify("Error en la limpieza"); } finally { setIsProcessing(false); }
+                    setWipeSystemConfirm(false); 
+                    setWipePassword('');
+                    showNotify("¡Sistema limpiado por completo!");
+                } catch (e) { 
+                    showNotify("Contraseña incorrecta o error de conexión."); 
+                } finally { setIsProcessing(false); }
             };
 
             const handleRefinance = async (e) => {
@@ -725,7 +760,7 @@
             if (showSplash) {
                 return (
                     <div className="fixed inset-0 bg-[#0f172a] z-[9999] flex flex-col items-center justify-center splash-fade-out">
-                        <LogoSVG className="w-40 h-40 text-indigo-500 logo-bounce mb-8" />
+                        <LogoSVG className="w-56 h-56 sm:w-64 sm:h-64 text-indigo-500 logo-bounce mb-6 drop-shadow-[0_0_35px_rgba(79,70,229,0.4)]" />
                         <h1 className="text-white text-5xl font-black heading-font tracking-tight">{companyName.split(' ')[0] || 'Connect'}</h1>
                         <p className="text-indigo-400 text-xs font-black uppercase tracking-[0.4em] mt-3">{companyName.split(' ').slice(1).join(' ') || 'Préstamos'}</p>
                     </div>
@@ -736,58 +771,35 @@
             const isRestrictedRole = userProfile?.role === 'empleado' || userProfile?.role === 'cobrador';
 
             return (
-                <div className="max-w-md mx-auto min-h-screen bg-slate-50 shadow-2xl relative overflow-x-hidden">
+                <div 
+                    className="max-w-md mx-auto min-h-screen bg-slate-50 shadow-2xl relative overflow-x-hidden"
+                    onClickCapture={(e) => { 
+                        if (!isOnline) { 
+                            e.preventDefault(); 
+                            e.stopPropagation(); 
+                            showNotify("Sin conexión a Internet. Acciones bloqueadas."); 
+                        } 
+                    }}
+                    onSubmitCapture={(e) => { 
+                        if (!isOnline) { 
+                            e.preventDefault(); 
+                            e.stopPropagation(); 
+                            showNotify("Sin conexión a Internet. Acciones bloqueadas."); 
+                        } 
+                    }}
+                    onFocusCapture={(e) => { 
+                        if (!isOnline) { 
+                            e.preventDefault(); 
+                            e.target.blur(); 
+                        } 
+                    }}
+                >
                     {!isOnline && (
-                        <div className="bg-orange-500 text-white text-[10px] font-black uppercase tracking-widest text-center py-2 flex items-center justify-center gap-2 z-[105] sticky top-0 shadow-md">
-                            <Icon name="alert-triangle" size={14} /> Modo Offline (Datos guardados localmente)
+                        <div className="bg-orange-500 text-white text-[10px] font-black uppercase tracking-widest text-center py-2.5 flex items-center justify-center gap-2 z-[105] sticky top-0 shadow-md border-b border-orange-600">
+                            <Icon name="alert-triangle" size={14} /> Modo Offline (Solo Lectura)
                         </div>
                     )}
                     {notification && <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[110] bg-slate-900 text-white px-6 py-3 rounded-2xl text-xs font-black shadow-2xl animate-in">{notification}</div>}
-
-                    {/* MODAL PIN DE SEGURIDAD (Solo aplica si el admin activó el candado local) */}
-                    {pinModal && (
-                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[400] flex items-center justify-center p-6">
-                            <div className="bg-white rounded-[2rem] p-8 w-full max-w-xs text-center shadow-2xl animate-in">
-                                <div className="w-16 h-16 bg-indigo-50 text-indigo-500 rounded-full flex items-center justify-center mx-auto mb-4"><Icon name="lock" size={32}/></div>
-                                <h3 className="text-xl font-black mb-2">PIN de Seguridad</h3>
-                                <p className="text-xs text-slate-400 font-bold mb-6">Ingresa el PIN maestro para salir del Modo Empleado.</p>
-                                <input type="password" value={pinInput} onChange={e => setPinInput(e.target.value)} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-black text-center text-2xl tracking-[0.5em] focus:border-indigo-500 outline-none mb-4" placeholder="****" maxLength="4" />
-                                <div className="flex gap-3">
-                                    <button onClick={() => { setPinModal(false); setPinInput(''); }} className="flex-1 py-3 bg-slate-100 rounded-xl font-black text-sm">Cancelar</button>
-                                    <button onClick={() => {
-                                        if (pinInput === (userProfile?.employeePin || '1234')) {
-                                            db.collection('users').doc(user.uid).set({ role: 'admin' }, { merge: true });
-                                            setPinModal(false); setPinInput(''); showNotify("Modo Administrador activado");
-                                        } else { showNotify("PIN Incorrecto"); }
-                                    }} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-black text-sm">Verificar</button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* MODAL CAMBIAR PIN MAESTRO */}
-                    {changePinModal && (
-                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[400] flex items-center justify-center p-6">
-                            <div className="bg-white rounded-[2rem] p-8 w-full max-w-xs text-center shadow-2xl animate-in">
-                                <div className="w-16 h-16 bg-indigo-50 text-indigo-500 rounded-full flex items-center justify-center mx-auto mb-4"><Icon name="shield" size={32}/></div>
-                                <h3 className="text-xl font-black mb-2">Cambiar PIN</h3>
-                                <p className="text-xs text-slate-400 font-bold mb-6">Ingresa el nuevo PIN de 4 dígitos para el Modo Empleado (UI Local).</p>
-                                <input type="password" value={newPinInput} onChange={e => setNewPinInput(e.target.value.replace(/\D/g, '').slice(0, 4))} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-black text-center text-2xl tracking-[0.5em] focus:border-indigo-500 outline-none mb-4" placeholder="****" maxLength="4" inputMode="numeric" />
-                                <div className="flex gap-3">
-                                    <button onClick={() => { setChangePinModal(false); setNewPinInput(''); }} className="flex-1 py-3 bg-slate-100 rounded-xl font-black text-sm">Cancelar</button>
-                                    <button onClick={async () => {
-                                        if (newPinInput.length < 4) return showNotify("El PIN debe tener 4 dígitos");
-                                        if (isProcessing) return;
-                                        setIsProcessing(true);
-                                        try {
-                                            await db.collection('users').doc(user.uid).set({ employeePin: newPinInput }, { merge: true });
-                                            setChangePinModal(false); setNewPinInput(''); showNotify("PIN actualizado con éxito");
-                                        } catch (error) { showNotify("Error al actualizar PIN"); } finally { setIsProcessing(false); }
-                                    }} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-black text-sm disabled:opacity-50">Guardar</button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
 
                     {/* MODAL CAMBIAR CONTRASEÑA */}
                     {passwordModal && (
@@ -889,12 +901,15 @@
                         <div className="fixed inset-0 bg-red-900/80 backdrop-blur-md z-[300] flex items-center justify-center p-6">
                             <div className="bg-white rounded-[2.5rem] p-8 w-full max-w-sm text-center shadow-2xl animate-in border-4 border-red-500">
                                 <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4"><Icon name="trash-2" size={32}/></div>
-                                <h3 className="text-xl font-black text-red-600 mb-2 uppercase">¡Peligro!</h3>
-                                <p className="text-xs text-slate-600 font-bold mb-6">Vas a borrar el historial de pagos de TODOS los clientes y vaciarás el registro de ganancias.</p>
-                                <div className="flex gap-3">
-                                    <button onClick={() => setWipeSystemConfirm(false)} className="flex-1 py-3 bg-slate-100 rounded-xl font-black text-sm">Cancelar</button>
-                                    <button onClick={handleWipeSystem} disabled={isProcessing} className="flex-1 py-3 bg-red-600 text-white rounded-xl font-black text-sm">Sí, Borrar Todo</button>
-                                </div>
+                                <h3 className="text-xl font-black text-red-600 mb-2 uppercase">¡Peligro Extremo!</h3>
+                                <p className="text-xs text-slate-600 font-bold mb-4">Vas a borrar el historial de pagos de TODOS los clientes y vaciarás el registro de ganancias.</p>
+                                <form onSubmit={handleWipeSystem}>
+                                    <input type="password" value={wipePassword} onChange={e => setWipePassword(e.target.value)} placeholder="Contraseña de tu cuenta" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-center focus:border-red-500 outline-none mb-6 text-slate-800" required />
+                                    <div className="flex gap-3">
+                                        <button type="button" onClick={() => { setWipeSystemConfirm(false); setWipePassword(''); }} className="flex-1 py-3 bg-slate-100 rounded-xl font-black text-sm text-slate-600 active:scale-95 transition-transform">Cancelar</button>
+                                        <button type="submit" disabled={isProcessing} className="flex-1 py-3 bg-red-600 text-white rounded-xl font-black text-sm disabled:opacity-50 active:scale-95 transition-transform">Sí, Borrar Todo</button>
+                                    </div>
+                                </form>
                             </div>
                         </div>
                     )}
@@ -927,10 +942,8 @@
                     {view === 'login' && (
                         <div className="min-h-screen bg-slate-50 flex flex-col justify-center px-6">
                             <div className="bg-white rounded-[3rem] p-8 shadow-2xl shadow-indigo-500/10 border border-slate-100">
-                                <div className="flex justify-center mb-8">
-                                    <div className="w-20 h-20 bg-indigo-50 rounded-[1.8rem] flex items-center justify-center text-indigo-600">
-                                        <LogoSVG className="w-12 h-12" color="#4f46e5" />
-                                    </div>
+                                <div className="flex justify-center mb-6">
+                                    <LogoSVG className="w-40 h-40 sm:w-48 sm:h-48 drop-shadow-2xl logo-bounce" color="#4f46e5" />
                                 </div>
                                 <h2 className="heading-font text-3xl font-black text-center text-slate-800 tracking-tight mb-2">Bienvenido</h2>
                                 <p className="text-center text-slate-400 font-bold text-sm mb-10">Accede a tu cuenta de Connect</p>
@@ -1298,9 +1311,12 @@
                                             <label className="flex flex-col items-center justify-center cursor-pointer w-full py-6 text-indigo-500 hover:text-indigo-600 transition-colors">
                                                 <Icon name="camera" size={32} className="mb-2 opacity-80"/>
                                                 <span className="text-[10px] font-black uppercase tracking-widest mt-2">Tomar Foto o Subir</span>
-                                                <input type="file" accept="image/*" className="hidden" onChange={(e) => {
+                                                <input type="file" accept="image/*" capture="environment" className="hidden" onChange={async (e) => {
                                                     const file = e.target.files[0];
-                                                    if(file) { const reader = new FileReader(); reader.onload = (ev) => setNewClientImage(ev.target.result); reader.readAsDataURL(file); }
+                                                    if(file) { 
+                                                        const compressedBase64 = await compressImage(file);
+                                                        setNewClientImage(compressedBase64); 
+                                                    }
                                                 }} />
                                             </label>
                                         )}
@@ -1375,12 +1391,11 @@
                                                 <label className="w-full h-full flex flex-col items-center justify-center text-slate-300 cursor-pointer hover:bg-slate-100 transition-colors">
                                                     <Icon name="camera" size={40} className="mb-2 opacity-50" />
                                                     <span className="text-[10px] font-black uppercase tracking-widest opacity-80">Subir Foto / Cédula</span>
-                                                    <input type="file" accept="image/*" className="hidden" onChange={(e) => {
+                                                    <input type="file" accept="image/*" capture="environment" className="hidden" onChange={async (e) => {
                                                         const file = e.target.files[0];
                                                         if(file) {
-                                                            const reader = new FileReader();
-                                                            reader.onload = (ev) => db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({ idImage: ev.target.result });
-                                                            reader.readAsDataURL(file);
+                                                            const compressedBase64 = await compressImage(file);
+                                                            db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({ idImage: compressedBase64 });
                                                         }
                                                     }} />
                                                 </label>
@@ -1392,12 +1407,11 @@
                                                 <a href={selectedClient.idImage} download={`Doc_${selectedClient.name}.png`} className="w-9 h-9 bg-slate-50 text-slate-600 rounded-xl flex items-center justify-center hover:bg-slate-100 active:scale-95 transition-transform" title="Descargar"><Icon name="download" size={16}/></a>
                                                 <label className="w-9 h-9 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center cursor-pointer hover:bg-indigo-100 active:scale-95 transition-transform" title="Cambiar Foto">
                                                     <Icon name="refresh-cw" size={16}/>
-                                                    <input type="file" accept="image/*" className="hidden" onChange={(e) => {
+                                                    <input type="file" accept="image/*" capture="environment" className="hidden" onChange={async (e) => {
                                                         const file = e.target.files[0];
                                                         if(file) {
-                                                            const reader = new FileReader();
-                                                            reader.onload = (ev) => db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({ idImage: ev.target.result });
-                                                            reader.readAsDataURL(file);
+                                                            const compressedBase64 = await compressImage(file);
+                                                            db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({ idImage: compressedBase64 });
                                                         }
                                                     }} />
                                                 </label>
@@ -1955,38 +1969,19 @@
                                             <div className="mt-4 space-y-2">
                                                 <h5 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2">Cobradores Activos</h5>
                                                 {cobradores.map(cob => (
-                                                    <div key={cob.id} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
-                                                        <p className="font-black text-slate-800">{cob.name}</p>
-                                                        <p className="text-[10px] font-bold text-slate-400 mt-1">{cob.email} • Ruta: {cob.assignedRoute}</p>
+                                                    <div key={cob.id} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex justify-between items-center">
+                                                        <div>
+                                                            <p className="font-black text-slate-800">{cob.name}</p>
+                                                            <p className="text-[10px] font-bold text-slate-400 mt-1">{cob.email} • Ruta: {cob.assignedRoute}</p>
+                                                        </div>
+                                                        <button onClick={() => { setEditingCobrador({ id: cob.id, name: cob.name, route: cob.assignedRoute }); setEditCobradorModal(true); }} className="p-2 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-100 active:scale-95 transition-all shadow-sm border border-indigo-100" title="Cambiar Ruta">
+                                                            <Icon name="map" size={16}/>
+                                                        </button>
                                                     </div>
                                                 ))}
                                             </div>
                                         )}
                                         <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-2">Los cobradores tienen su propio login y solo ven la ruta asignada.</p>
-                                    </div>
-                                </div>
-
-                                <div className="space-y-4 pt-4 border-t border-slate-100">
-                                    <div className="flex items-center gap-3 px-2">
-                                        <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center"><Icon name="users" size={20}/></div>
-                                        <h4 className="font-black text-sm uppercase tracking-widest text-slate-400">Modo Empleado Local (UI)</h4>
-                                    </div>
-                                    <div className="bg-slate-50 p-6 rounded-[2.5rem] border border-slate-100 space-y-4">
-                                        <div className="flex justify-between items-center pt-2 pb-2">
-                                            <span className="font-bold text-slate-700 text-sm">Bloqueo de Interfaz Local</span>
-                                            <div className="w-12 h-6 rounded-full relative cursor-pointer transition-colors"
-                                                 style={{ backgroundColor: userProfile?.role === 'empleado' ? '#4f46e5' : '#cbd5e1' }}
-                                                 onClick={() => {
-                                                     if(userProfile?.role === 'empleado') { setPinModal(true); } 
-                                                     else { handleUpdateSetting('role', 'empleado'); showNotify("UI Bloqueada"); }
-                                                 }}>
-                                                 <div className="w-4 h-4 bg-white rounded-full absolute top-1 transition-all" style={{ left: userProfile?.role === 'empleado' ? '1.75rem' : '0.25rem' }}></div>
-                                            </div>
-                                        </div>
-                                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Oculta ajustes en este mismo dispositivo sin crear otro usuario.</p>
-                                        <button onClick={() => setChangePinModal(true)} className="w-full bg-slate-200 text-slate-700 p-4 rounded-2xl font-black flex items-center justify-center gap-2 active:scale-95 transition-transform">
-                                            <Icon name="shield" size={18}/> Cambiar PIN de Desbloqueo
-                                        </button>
                                     </div>
                                 </div>
 
@@ -2056,6 +2051,44 @@
                                     <div className="flex gap-3 mt-6">
                                         <button type="button" onClick={() => setCobradorModal(false)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-black text-slate-600 active:scale-95 transition-transform">Cancelar</button>
                                         <button type="submit" disabled={isProcessing} className="flex-1 py-4 bg-emerald-500 text-white rounded-2xl font-black shadow-lg shadow-emerald-500/30 active:scale-95 transition-transform">{isProcessing ? '...' : 'Crear Usuario'}</button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* MODAL EDITAR RUTA COBRADOR */}
+                    {editCobradorModal && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[400] flex items-center justify-center p-6">
+                            <div className="bg-white rounded-[2.5rem] p-8 w-full max-w-sm shadow-2xl animate-in">
+                                <h3 className="heading-font text-xl font-black text-slate-800 mb-2">Editar Cobrador</h3>
+                                <p className="text-xs text-slate-500 font-bold mb-6">Cambia la ruta asignada para <b className="text-indigo-600">{editingCobrador.name}</b>.</p>
+                                
+                                <form onSubmit={async (e) => {
+                                    e.preventDefault();
+                                    if(isProcessing) return;
+                                    setIsProcessing(true);
+                                    try {
+                                        await db.collection('users').doc(editingCobrador.id).update({ assignedRoute: editingCobrador.route });
+                                        setEditCobradorModal(false);
+                                        showNotify("Ruta de cobrador actualizada");
+                                    } catch(err) {
+                                        showNotify("Error al actualizar la ruta");
+                                    } finally {
+                                        setIsProcessing(false);
+                                    }
+                                }} className="space-y-4">
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Asignar Nueva Ruta</label>
+                                        <select value={editingCobrador.route} onChange={e => setEditingCobrador({...editingCobrador, route: e.target.value})} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold outline-none focus:border-indigo-500 appearance-none cursor-pointer text-indigo-700">
+                                            <option value="Todas">Acceso a Todas las Rutas</option>
+                                            {routesList.map((r, i) => <option key={i} value={r}>{r}</option>)}
+                                        </select>
+                                    </div>
+                                    
+                                    <div className="flex gap-3 mt-6">
+                                        <button type="button" onClick={() => setEditCobradorModal(false)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-black text-slate-600 active:scale-95 transition-transform">Cancelar</button>
+                                        <button type="submit" disabled={isProcessing} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg shadow-indigo-600/30 active:scale-95 transition-transform">{isProcessing ? '...' : 'Guardar'}</button>
                                     </div>
                                 </form>
                             </div>
