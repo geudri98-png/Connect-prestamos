@@ -83,6 +83,29 @@
         .dark-theme .border-slate-200 { border-color: #475569 !important; }
         .dark-theme header.bg-white { background-color: #1e293b !important; }
         .dark-theme .bg-slate-900 { background-color: #0f172a !important; border: 1px solid #334155; }
+
+        /* Estilos Especiales para Impresoras Térmicas (58mm y 80mm) */
+        @media print {
+            body * { visibility: hidden; }
+            .print-receipt-container, .print-receipt-container * { visibility: visible; color: black !important; }
+            .print-receipt-container {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: var(--print-width, 56mm) !important;
+                max-width: var(--print-width, 56mm) !important;
+                margin: 0 auto;
+                padding: 0;
+                box-shadow: none !important;
+                background: white !important;
+                font-family: 'Inter', sans-serif !important;
+            }
+            .no-print { display: none !important; }
+            /* Quitar fondos grises/verdes para que la impresora térmica no gaste tinta negra */
+            .bg-emerald-50, .bg-slate-50, .bg-indigo-50, .bg-white { background-color: transparent !important; border: none !important; }
+            .border, .border-slate-100, .border-slate-200, .border-emerald-100 { border-color: #000 !important; }
+            .text-emerald-500, .text-indigo-500, .text-slate-400, .text-slate-800 { color: #000 !important; }
+        }
     </style>
 </head>
 <body>
@@ -205,6 +228,11 @@
             const [refinanceModal, setRefinanceModal] = useState(false);
             const [refinanceForm, setRefinanceForm] = useState({ amount: '', interest: '', inst: '' });
 
+            // Referencias y Estado para IMPRESORA NATIVA (Web Bluetooth)
+            const printerDeviceRef = useRef(null);
+            const printerCharRef = useRef(null);
+            const [isPrinterReady, setIsPrinterReady] = useState(false);
+
             // Rutas y Cobradores Modal States
             const [newRouteInput, setNewRouteInput] = useState('');
             const [cobradorModal, setCobradorModal] = useState(false);
@@ -230,8 +258,167 @@
             const handleUpdateSetting = async (field, value) => {
                 try {
                     // Los ajustes globales siempre van al documento del Admin (dueño)
-                    if(adminUid) await db.collection('users').doc(adminUid).set({ [field]: value }, { merge: true });
+                    if(adminUid && isOnline) await db.collection('users').doc(adminUid).set({ [field]: value }, { merge: true });
                 } catch (e) { console.error("Error al actualizar ajuste", e); }
+            };
+
+            // ==========================================
+            // VINCULACIÓN NATIVA DE IMPRESORA BLUETOOTH (SIN APPS TERCEROS)
+            // ==========================================
+            const handleConnectPrinter = async () => {
+                if (!navigator.bluetooth) {
+                    showNotify("Tu navegador no soporta Bluetooth Web. Usa Google Chrome en Android.");
+                    return;
+                }
+                try {
+                    setIsProcessing(true);
+                    showNotify("Buscando impresoras cercanas...");
+                    
+                    const device = await navigator.bluetooth.requestDevice({
+                        acceptAllDevices: true,
+                        optionalServices: [
+                            '000018f0-0000-1000-8000-00805f9b34fb', // Impresoras genéricas
+                            'e7810a71-73ae-499d-8c15-faa9aef0c3f2', // Impresoras mini
+                            '49535343-fe7d-4ae5-8fa9-9fafd205e455', // Módulos seriales
+                            '0000fee7-0000-1000-8000-00805f9b34fb',
+                            '0000ff00-0000-1000-8000-00805f9b34fb'
+                        ]
+                    });
+
+                    const server = await device.gatt.connect();
+                    const services = await server.getPrimaryServices();
+                    let targetChar = null;
+
+                    // Buscar un servicio que permita escritura (enviar datos a imprimir)
+                    for (const service of services) {
+                        const characteristics = await service.getCharacteristics();
+                        for (const char of characteristics) {
+                            if (char.properties.write || char.properties.writeWithoutResponse) {
+                                targetChar = char;
+                                break;
+                            }
+                        }
+                        if (targetChar) break;
+                    }
+
+                    if (!targetChar) {
+                        device.gatt.disconnect();
+                        throw new Error("El dispositivo no admite impresión directa.");
+                    }
+
+                    printerDeviceRef.current = device;
+                    printerCharRef.current = targetChar;
+                    setIsPrinterReady(true);
+                    
+                    // Listener por si se apaga o desconecta
+                    device.addEventListener('gattserverdisconnected', () => {
+                        setIsPrinterReady(false);
+                        printerCharRef.current = null;
+                        showNotify("Impresora desconectada");
+                    });
+
+                    handleUpdateSetting('printerName', device.name || 'Impresora Térmica');
+                    showNotify("¡Conectada y lista para imprimir!");
+                } catch (err) {
+                    console.log("Error Bluetooth:", err);
+                    showNotify("Vinculación cancelada o fallida.");
+                } finally {
+                    setIsProcessing(false);
+                }
+            };
+
+            // GENERADOR DE COMANDOS ESC/POS PARA IMPRESIÓN DIRECTA
+            const printReceiptDirectly = async (data) => {
+                if (!printerCharRef.current) {
+                    showNotify("¡Atención! Primero vincula la impresora en Ajustes.");
+                    setView('settings');
+                    setReceiptData(null);
+                    return;
+                }
+
+                try {
+                    showNotify("Imprimiendo ticket...");
+                    let bytes = [];
+                    const addBytes = (arr) => bytes.push(...arr);
+                    
+                    // Limpiar acentos para evitar símbolos raros en impresoras chinas
+                    const sanitize = (text) => text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/ñ/g, "n").replace(/Ñ/g, "N");
+                    
+                    const addText = (text) => {
+                        const str = sanitize(text);
+                        for (let i = 0; i < str.length; i++) bytes.push(str.charCodeAt(i));
+                    };
+
+                    const is80mm = userProfile?.paperSize === '80mm';
+                    const charsPerLine = is80mm ? 48 : 32;
+
+                    const centerText = (text) => {
+                        const str = sanitize(text);
+                        const spaces = Math.max(0, Math.floor((charsPerLine - str.length) / 2));
+                        addText(' '.repeat(spaces) + str + '\n');
+                    };
+
+                    const padText = (left, right) => {
+                        const lStr = sanitize(left);
+                        const rStr = sanitize(right);
+                        const spaces = Math.max(0, charsPerLine - lStr.length - rStr.length);
+                        addText(lStr + ' '.repeat(spaces) + rStr + '\n');
+                    };
+
+                    const hr = () => addText('-'.repeat(charsPerLine) + '\n');
+
+                    // --- INICIO COMANDOS ESC/POS ---
+                    addBytes([0x1B, 0x40]); // Resetear impresora
+                    
+                    // Cabecera
+                    addBytes([0x1B, 0x61, 0x01]); // Alinear al centro
+                    addBytes([0x1B, 0x45, 0x01]); // Negrita On
+                    addBytes([0x1D, 0x21, 0x11]); // Doble altura y anchura
+                    centerText(companyName);
+                    addBytes([0x1D, 0x21, 0x00]); // Tamaño normal
+                    addBytes([0x1B, 0x45, 0x00]); // Negrita Off
+                    addText("\nRECIBO DE PAGO\n\n");
+                    
+                    // Cuerpo
+                    addBytes([0x1B, 0x61, 0x00]); // Alinear a la izquierda
+                    padText("Fecha:", data.transaction.date);
+                    padText("Ref:", data.transaction.ref);
+                    padText("Cliente:", data.client.name.substring(0, charsPerLine - 10));
+                    hr();
+                    padText("Concepto:", data.transaction.description.substring(0, charsPerLine - 11));
+                    
+                    addBytes([0x1B, 0x45, 0x01]); // Negrita On
+                    padText("Recibido:", `${currency}${Math.round(data.transaction.amount).toLocaleString()}`);
+                    addBytes([0x1B, 0x45, 0x00]); // Negrita Off
+                    
+                    if (data.transaction.paidMora > 0) padText("Mora Pagada:", `-${currency}${Math.round(data.transaction.paidMora).toLocaleString()}`);
+                    if (data.transaction.surplus > 0) padText("Abono Prox.:", `${currency}${Math.round(data.transaction.surplus).toLocaleString()}`);
+                    hr();
+                    
+                    if (data.transaction.remainingDebt !== undefined) {
+                        padText("Bal. Restante:", `${currency}${Math.round(data.transaction.remainingDebt).toLocaleString()}`);
+                        padText("Cuotas Rest:", String(data.transaction.remainingInstallments));
+                    }
+
+                    // Pie de página
+                    addBytes([0x1B, 0x61, 0x01]); // Alinear al centro
+                    addText("\n" + receiptFooter + "\n");
+                    addBytes([0x0A, 0x0A, 0x0A]); // Bajar 3 líneas para poder arrancar el papel
+
+                    // Dividir el envío en trozos de 100 bytes (Las impresoras Bluetooth se saturan si envías todo junto)
+                    const payload = new Uint8Array(bytes);
+                    const CHUNK_SIZE = 100;
+                    for (let i = 0; i < payload.length; i += CHUNK_SIZE) {
+                        const chunk = payload.slice(i, i + CHUNK_SIZE);
+                        await printerCharRef.current.writeValue(chunk);
+                    }
+                    
+                    showNotify("Impresión exitosa");
+                } catch (error) {
+                    console.error("Print error:", error);
+                    showNotify("La impresora perdió la conexión. Vuelve a vincularla.");
+                    setIsPrinterReady(false);
+                }
             };
 
             // Función para comprimir imágenes y ahorrar espacio en base de datos
@@ -338,13 +525,24 @@
                 const unsubscribe = auth.onAuthStateChanged(usr => {
                     setUser(usr);
                     if (usr) {
-                        setView('dashboard');
                         db.collection('users').doc(usr.uid).onSnapshot(doc => {
                             if (doc.exists) {
                                 const profile = doc.data();
+                                // Bloqueo estricto para cobradores eliminados
+                                if (profile.status === 'deleted' || profile.role === 'disabled') {
+                                    auth.signOut();
+                                    showNotify("Tu acceso ha sido revocado por el administrador.");
+                                    return;
+                                }
                                 setUserProfile(profile);
                                 // Si es cobrador, usar el UID del admin para leer clientes. Si no, usar su propio UID.
                                 setAdminUid(profile.role === 'cobrador' ? profile.adminUid : usr.uid);
+                                setView('dashboard');
+                            } else {
+                                // Si no tiene documento en la base de datos, es un Admin nuevo
+                                setUserProfile({ role: 'admin' });
+                                setAdminUid(usr.uid);
+                                setView('dashboard');
                             }
                         });
                     } else {
@@ -384,7 +582,9 @@
             useEffect(() => {
                 if (user?.uid && userProfile?.role !== 'cobrador' && userProfile?.role !== 'empleado') {
                     const unsub = db.collection('users').where('adminUid', '==', user.uid).onSnapshot(snap => {
-                        setCobradores(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+                        const loadedCobradores = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                        // Ocultamos los que fueron "eliminados" visualmente
+                        setCobradores(loadedCobradores.filter(c => c.status !== 'deleted'));
                     });
                     return () => unsub();
                 } else {
@@ -398,6 +598,10 @@
             // ==========================================
             const handleCreateCobrador = async (e) => {
                 e.preventDefault();
+                if (!isOnline) {
+                    showNotify("Crear usuarios requiere conexión a Internet.");
+                    return;
+                }
                 setIsProcessing(true);
                 let tempApp = null;
                 try {
@@ -418,6 +622,7 @@
                         assignedRoute: cobradorForm.route,
                         name: cobradorForm.name,
                         email: cobradorForm.email,
+                        status: 'active', // Nuevo estado de seguridad
                         createdAt: firebase.firestore.FieldValue.serverTimestamp()
                     });
                     
@@ -454,7 +659,10 @@
                 const file = e.target.files[0];
                 if (file && adminUid) {
                     const reader = new FileReader();
-                    reader.onload = (ev) => db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({ idImage: ev.target.result });
+                    reader.onload = (ev) => {
+                        const p = db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({ idImage: ev.target.result });
+                        if(isOnline) p.catch(e => console.log("Upload error offline"));
+                    };
                     reader.readAsDataURL(file);
                 }
             };
@@ -538,37 +746,52 @@
                         paidMora: paidMora, remainingDebt: newDebt
                     };
 
+                    const promises = [];
+
                     if (amount > 0) {
                         newHistory.unshift(transaction);
-                        await db.collection('users').doc(adminUid).collection('gains').add(gainRecord);
+                        promises.push(db.collection('users').doc(adminUid).collection('gains').add(gainRecord));
                     }
 
                     if (newDebt <= 0.1) {
-                        await db.collection('users').doc(adminUid).collection('clients').doc(clientId).update({ totalDebt: 0, loan: null, history: newHistory });
-                        showNotify("¡Préstamo Saldado!");
+                        promises.push(db.collection('users').doc(adminUid).collection('clients').doc(clientId).update({ totalDebt: 0, loan: null, history: newHistory }));
                     } else {
-                        await db.collection('users').doc(adminUid).collection('clients').doc(clientId).update({
+                        promises.push(db.collection('users').doc(adminUid).collection('clients').doc(clientId).update({
                             totalDebt: newDebt, 'loan.paidInstallments': newPaid, 'loan.nextPaymentDate': nextDate,
                             'loan.partialCredit': surplus, 'loan.installmentAmount': newInstallmentAmount, 'loan.mora': 0, history: newHistory
-                        });
-                        showNotify("Transacción Exitosa");
+                        }));
                     }
+
+                    // Magia Offline: Si hay internet esperamos a que suba, si no, lo encolamos y seguimos
+                    if (isOnline) {
+                        await Promise.all(promises);
+                    } else {
+                        promises.forEach(p => p.catch(e => console.log("Encolado para sincronización")));
+                    }
+
+                    if (newDebt <= 0.1) showNotify("¡Préstamo Saldado!");
+                    else showNotify("Transacción Registrada");
+
                     setIsTransacting(false);
                     if(amount > 0) setReceiptData({ client, transaction });
                 } catch (error) { showNotify("Error al procesar el pago"); } finally { setIsProcessing(false); }
             };
 
             const handleDeleteClient = async (id) => {
-                await db.collection('users').doc(adminUid).collection('clients').doc(id).delete();
+                const p = db.collection('users').doc(adminUid).collection('clients').doc(id).delete();
+                if(isOnline) await p.catch(e => console.log("Offline mode"));
                 setDeleteConfirm(null); setView('dashboard'); showNotify("Cliente eliminado");
             };
 
             const handleDeletePayment = async (paymentId) => {
                 try {
                     const newHistory = selectedClient.history.filter(h => h.id !== paymentId);
-                    await db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({ history: newHistory });
-                    const gainSnapshot = await db.collection('users').doc(adminUid).collection('gains').where('clientId', '==', selectedClientId).where('date', '==', selectedClient.history.find(h => h.id === paymentId).date).get();
-                    gainSnapshot.forEach(doc => doc.ref.delete());
+                    const p1 = db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({ history: newHistory });
+                    const p2 = db.collection('users').doc(adminUid).collection('gains').where('clientId', '==', selectedClientId).where('date', '==', selectedClient.history.find(h => h.id === paymentId).date).get().then(snap => { snap.forEach(doc => doc.ref.delete()); });
+                    
+                    if(isOnline) await Promise.all([p1, p2]);
+                    else { p1.catch(e=>e); p2.catch(e=>e); showNotify("Pago anulado (Se sincronizará luego)"); }
+                    
                     setDeletePaymentConfirm(null); showNotify("Pago anulado");
                 } catch (e) { showNotify("Error al anular pago"); }
             };
@@ -577,7 +800,8 @@
                 if (isProcessing) return;
                 setIsProcessing(true);
                 try {
-                    await db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({ history: [] });
+                    const p = db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({ history: [] });
+                    if(isOnline) await p;
                     setClearHistoryConfirm(false); showNotify("Historial limpio");
                 } catch(e) { showNotify("Error al limpiar historial"); } finally { setIsProcessing(false); }
             };
@@ -601,7 +825,8 @@
                     storedGains.forEach(g => { batch.delete(db.collection('users').doc(adminUid).collection('gains').doc(g.id)); });
                     
                     await batch.commit();
-                    await db.collection('users').doc(adminUid).set({ historicalGains: firebase.firestore.FieldValue.increment(totalGainsToArchive) }, { merge: true });
+                    const p = db.collection('users').doc(adminUid).set({ historicalGains: firebase.firestore.FieldValue.increment(totalGainsToArchive) }, { merge: true });
+                    if(isOnline) await p;
                     
                     setResetGainsConfirm(false); showNotify("Corte realizado. Ganancias archivadas.");
                 } catch (e) { showNotify("Error al hacer corte"); } finally { setIsProcessing(false); }
@@ -632,6 +857,7 @@
 
             const handleWipeSystem = async (e) => {
                 e.preventDefault();
+                if(!isOnline) return showNotify("Borrar el sistema requiere Internet");
                 if(isProcessing) return;
                 setIsProcessing(true);
                 try {
@@ -669,7 +895,7 @@
                     const total = currentClient.loan.type === 'Rédito' ? baseNewDebt : baseNewDebt + totalInterest;
                     const newInstallmentAmount = currentClient.loan.type === 'Rédito' ? interestAmountPerCuota : total / newInst;
                     
-                    await db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({
+                    const p = db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({
                         totalDebt: total, 'loan.amount': currentClient.loan.amount + addedAmount, 'loan.interest': newInterest,
                         'loan.totalToPay': total, 'loan.totalInstallments': newInst, 'loan.installmentAmount': newInstallmentAmount,
                         history: [{
@@ -679,6 +905,7 @@
                             remainingInstallments: currentClient.loan.type === 'Rédito' ? '∞' : newInst - currentClient.loan.paidInstallments, paidMora: 0
                         }, ...(currentClient.history || [])]
                     });
+                    if(isOnline) await p;
                     setRefinanceModal(false); showNotify("Préstamo refinanciado con éxito");
                 } catch (err) { showNotify("Error al refinanciar"); } finally { setIsProcessing(false); }
             };
@@ -811,35 +1038,13 @@
             const isRestrictedRole = userProfile?.role === 'empleado' || userProfile?.role === 'cobrador';
 
             return (
-                <div 
-                    className="max-w-md mx-auto min-h-screen bg-slate-50 shadow-2xl relative overflow-x-hidden"
-                    onClickCapture={(e) => { 
-                        if (!isOnline) { 
-                            e.preventDefault(); 
-                            e.stopPropagation(); 
-                            showNotify("Sin conexión a Internet. Acciones bloqueadas."); 
-                        } 
-                    }}
-                    onSubmitCapture={(e) => { 
-                        if (!isOnline) { 
-                            e.preventDefault(); 
-                            e.stopPropagation(); 
-                            showNotify("Sin conexión a Internet. Acciones bloqueadas."); 
-                        } 
-                    }}
-                    onFocusCapture={(e) => { 
-                        if (!isOnline) { 
-                            e.preventDefault(); 
-                            e.target.blur(); 
-                        } 
-                    }}
-                >
+                <div className="max-w-md mx-auto min-h-screen bg-slate-50 shadow-2xl relative overflow-x-hidden">
                     {!isOnline && (
-                        <div className="bg-orange-500 text-white text-[10px] font-black uppercase tracking-widest text-center py-2.5 flex items-center justify-center gap-2 z-[105] sticky top-0 shadow-md border-b border-orange-600">
-                            <Icon name="alert-triangle" size={14} /> Modo Offline (Solo Lectura)
+                        <div className="bg-orange-500 text-white text-[10px] font-black uppercase tracking-widest text-center py-2.5 flex items-center justify-center gap-2 z-[105] sticky top-0 shadow-md border-b border-orange-600 no-print">
+                            <Icon name="alert-triangle" size={14} /> Modo Offline (Sincronización Pendiente)
                         </div>
                     )}
-                    {notification && <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[110] bg-slate-900 text-white px-6 py-3 rounded-2xl text-xs font-black shadow-2xl animate-in">{notification}</div>}
+                    {notification && <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[110] bg-slate-900 text-white px-6 py-3 rounded-2xl text-xs font-black shadow-2xl animate-in no-print">{notification}</div>}
 
                     {/* MODAL CAMBIAR CONTRASEÑA */}
                     {passwordModal && (
@@ -850,6 +1055,7 @@
                                 <p className="text-xs text-slate-400 font-bold mb-6">Ingresa tu nueva contraseña (mínimo 6 caracteres).</p>
                                 <form onSubmit={async (e) => {
                                     e.preventDefault();
+                                    if(!isOnline) return showNotify("Esta acción requiere Internet");
                                     if(isProcessing) return;
                                     setIsProcessing(true);
                                     try {
@@ -929,7 +1135,8 @@
                                             const newDebt = selectedClient.totalDebt + moraAmount;
                                             const currentMora = selectedClient.loan?.mora || 0;
                                             const newMora = currentMora + moraAmount;
-                                            await db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({ totalDebt: newDebt, 'loan.mora': newMora });
+                                            const p = db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({ totalDebt: newDebt, 'loan.mora': newMora });
+                                            if(isOnline) await p;
                                             setMoraConfirm(false); showNotify(`Mora aplicada correctamente`);
                                         } catch (e) { showNotify("Error al aplicar mora"); } finally { setIsProcessing(false); }
                                     }} disabled={isProcessing} className="flex-1 py-4 bg-red-500 text-white rounded-2xl font-black shadow-lg shadow-red-500/30 active:scale-95 transition-transform">Aplicar</button>
@@ -966,8 +1173,12 @@
                                         if(isProcessing) return;
                                         setIsProcessing(true);
                                         try {
-                                            await db.collection('users').doc(deleteCobradorConfirm).delete();
-                                            showNotify("Cobrador eliminado con éxito");
+                                            // En lugar de borrar el documento, bloqueamos permanentemente su acceso
+                                            await db.collection('users').doc(deleteCobradorConfirm).update({
+                                                status: 'deleted',
+                                                role: 'disabled'
+                                            });
+                                            showNotify("Cobrador eliminado y bloqueado con éxito");
                                             setDeleteCobradorConfirm(null);
                                         } catch(e) {
                                             showNotify("Error al eliminar cobrador");
@@ -1354,7 +1565,7 @@
                                 <button onClick={() => { setView('dashboard'); setNewClientImage(null); }} className="p-3 text-slate-400 bg-slate-50 rounded-2xl"><Icon name="arrow-left"/></button>
                                 <h2 className="heading-font text-xl font-black text-slate-800">Nuevo Cliente</h2>
                             </header>
-                            <form onSubmit={(e) => { 
+                            <form onSubmit={async (e) => { 
                                 e.preventDefault(); 
                                 const data = { 
                                     name: e.target.name.value, cedula: e.target.cedula.value, phone: e.target.phone.value, email: e.target.email.value, address: e.target.address.value, 
@@ -1363,7 +1574,8 @@
                                     status: userProfile?.role === 'admin' ? 'active' : 'pending_approval',
                                     createdAt: firebase.firestore.FieldValue.serverTimestamp() 
                                 }; 
-                                db.collection('users').doc(adminUid).collection('clients').add(data); 
+                                const p = db.collection('users').doc(adminUid).collection('clients').add(data); 
+                                if(isOnline) await p.catch(e=>console.log(e));
                                 setView('dashboard'); setNewClientImage(null); showNotify(userProfile?.role === 'admin' ? "Registrado correctamente" : "Enviado para aprobación"); 
                             }} className="p-8 space-y-5">
                                 <div className="space-y-1.5">
@@ -1414,7 +1626,12 @@
                     {view === 'edit_client' && selectedClient && (
                         <div className="animate-in bg-white min-h-screen">
                             <header className="p-6 border-b flex items-center gap-4 bg-white sticky top-0 z-10 shadow-sm"><button onClick={() => setView('profile')} className="p-3 text-slate-400 bg-slate-50 rounded-2xl"><Icon name="arrow-left"/></button><h2 className="heading-font text-xl font-black text-slate-800">Editar Cliente</h2></header>
-                            <form onSubmit={(e) => { e.preventDefault(); db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({ name: e.target.name.value, cedula: e.target.cedula.value, phone: e.target.phone.value, email: e.target.email.value, address: e.target.address.value, route: e.target.route.value }); setView('profile'); showNotify("Datos actualizados"); }} className="p-8 space-y-5">
+                            <form onSubmit={async (e) => { 
+                                e.preventDefault(); 
+                                const p = db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({ name: e.target.name.value, cedula: e.target.cedula.value, phone: e.target.phone.value, email: e.target.email.value, address: e.target.address.value, route: e.target.route.value }); 
+                                if(isOnline) await p.catch(e=>e);
+                                setView('profile'); showNotify("Datos actualizados"); 
+                            }} className="p-8 space-y-5">
                                 <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Nombre Completo</label><input name="name" defaultValue={selectedClient.name} type="text" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500" required /></div>
                                 <div className="space-y-1.5">
                                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Asignar a Ruta/Sector</label>
@@ -1632,7 +1849,7 @@
                         <div className="animate-in bg-white min-h-screen pb-20">
                             <header className="p-6 border-b flex items-center gap-4 bg-white sticky top-0 z-10 shadow-sm"><button onClick={() => setView('profile')} className="p-3 text-slate-400"><Icon name="arrow-left"/></button><h2 className="heading-font text-xl font-black text-slate-800">Asignar Préstamo</h2></header>
                             
-                            <form onSubmit={(e) => { 
+                            <form onSubmit={async (e) => { 
                                 e.preventDefault(); 
                                 const { amount, interest, installments, type, interestType, frequency, startDate } = loanForm;
                                 const loanData = { 
@@ -1641,13 +1858,15 @@
                                     totalToPay: loanPreview.totalToPay, installmentAmount: loanPreview.installmentAmount, 
                                     startDate: formatDate(parseDateString(startDate)), nextPaymentDate: calculateNextDate(formatDate(parseDateString(startDate)), frequency) 
                                 }; 
+                                let p;
                                 if (userProfile?.role === 'admin') {
-                                    db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({ totalDebt: loanPreview.totalToPay, loan: loanData }); 
+                                    p = db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({ totalDebt: loanPreview.totalToPay, loan: loanData }); 
                                     showNotify("Préstamo Asignado"); 
                                 } else {
-                                    db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({ pendingLoan: loanData }); 
+                                    p = db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({ pendingLoan: loanData }); 
                                     showNotify("Préstamo enviado para aprobación"); 
                                 }
+                                if (isOnline) await p.catch(e=>e);
                                 setView('profile'); 
                             }} className="p-6 space-y-6">
                                 <div className="bg-slate-900 text-white rounded-[2rem] p-6 shadow-xl relative overflow-hidden">
@@ -1749,19 +1968,19 @@
                                         </div>
                                     </div>
                                     <button disabled={isProcessing} onClick={() => recordTransaction(selectedClientId, document.getElementById('inputAmount').value, document.getElementById('inputDate').value)} className="w-full bg-emerald-500 text-white p-5 rounded-[2rem] font-black text-lg shadow-xl active:scale-95 transition-all disabled:opacity-50">
-                                        {isProcessing ? 'Procesando...' : 'Confirmar en Nube'}
+                                        {isProcessing ? 'Procesando...' : 'Confirmar Cobro'}
                                     </button>
                                 </div>
                             </div>
                         </div>
                     )}
 
-                    {/* MODAL RECIBO DE PAGO SUPER DETALLADO */}
+                    {/* MODAL RECIBO DE PAGO SUPER DETALLADO (CON IMPRESIÓN TÉRMICA) */}
                     {receiptData && (
                         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[200] flex justify-center p-4 overflow-y-auto items-center">
                             <div className="bg-white w-full max-w-sm rounded-[2.5rem] shadow-2xl animate-in">
-                                <div ref={receiptRef} className="p-8 bg-white text-slate-800 relative rounded-t-[2.5rem]">
-                                    <div className="absolute top-0 left-0 w-full h-2 bg-emerald-500"></div>
+                                <div ref={receiptRef} style={{ '--print-width': userProfile?.paperSize === '80mm' ? '78mm' : '56mm' }} className="print-receipt-container p-8 bg-white text-slate-800 relative rounded-t-[2.5rem]">
+                                    <div className="absolute top-0 left-0 w-full h-2 bg-emerald-500 no-print"></div>
                                     <div className="text-center mb-6 mt-2">
                                         <LogoSVG className="w-20 h-20 mx-auto mb-2" color="#10b981" />
                                         <h4 className="heading-font text-xl font-black text-slate-900">{companyName}</h4>
@@ -1801,7 +2020,7 @@
                                         <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest">{receiptFooter}</p>
                                     </div>
                                 </div>
-                                <div className="p-4 bg-slate-50 flex gap-2 rounded-b-[2.5rem]">
+                                <div className="p-4 bg-slate-50 flex flex-wrap gap-2 rounded-b-[2.5rem] no-print">
                                     <button onClick={async () => {
                                         if(!receiptRef.current) return;
                                         try {
@@ -1816,10 +2035,13 @@
                                                 }
                                             }, 'image/png');
                                         } catch (error) { showNotify("Error generando recibo"); }
-                                    }} className="flex-1 bg-emerald-500 text-white py-4 rounded-2xl font-black flex items-center justify-center gap-2 active:scale-95 shadow-lg shadow-emerald-100">
-                                        <Icon name="share-2" size={18}/> Compartir Ticket
+                                    }} className="flex-[1_0_100%] bg-emerald-500 text-white py-4 rounded-2xl font-black flex items-center justify-center gap-2 active:scale-95 shadow-lg shadow-emerald-100">
+                                        <Icon name="share-2" size={18}/> Compartir Ticket Digital
                                     </button>
-                                    <button onClick={() => setReceiptData(null)} className="p-4 bg-slate-200 text-slate-600 rounded-2xl active:scale-95"><Icon name="x"/></button>
+                                    <button onClick={() => printReceiptDirectly(receiptData)} className="flex-1 bg-slate-800 text-white py-4 rounded-2xl font-black flex items-center justify-center gap-2 active:scale-95 shadow-lg">
+                                        <Icon name="printer" size={18}/> Imprimir (Térmica)
+                                    </button>
+                                    <button onClick={() => setReceiptData(null)} className="flex-none p-4 bg-slate-200 text-slate-600 rounded-2xl active:scale-95"><Icon name="x"/></button>
                                 </div>
                             </div>
                         </div>
@@ -1988,6 +2210,44 @@
                                         <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Interés Base por Defecto (%)</label><input type="number" defaultValue={userProfile?.defaultInterest || ''} onBlur={e => handleUpdateSetting('defaultInterest', e.target.value)} className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold text-slate-700 outline-none focus:border-indigo-500" placeholder="Ej: 20" /></div>
                                         <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Mora Base por Defecto (%)</label><input type="number" defaultValue={userProfile?.defaultMoraPercentage || ''} onBlur={e => handleUpdateSetting('defaultMoraPercentage', e.target.value)} className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold text-slate-700 outline-none focus:border-indigo-500" placeholder="Ej: 10" /></div>
                                         <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Pie de Página (Recibos)</label><input type="text" defaultValue={receiptFooter} onBlur={e => handleUpdateSetting('receiptFooter', e.target.value)} className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold text-slate-700 outline-none focus:border-indigo-500" placeholder="Ej: ¡Gracias por preferirnos!" /></div>
+                                    </div>
+                                </div>
+
+                                {/* SECCIÓN: IMPRESORAS TÉRMICAS BLUETOOTH */}
+                                <div className="space-y-4 pt-4 border-t border-slate-100">
+                                    <div className="flex items-center gap-3 px-2">
+                                        <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center"><Icon name="printer" size={20}/></div>
+                                        <h4 className="font-black text-sm uppercase tracking-widest text-slate-400">Impresora Bluetooth Nativa</h4>
+                                    </div>
+                                    <div className="bg-slate-50 p-6 rounded-[2.5rem] border border-slate-100 space-y-4">
+                                        
+                                        <div className="flex justify-between items-center bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+                                            <div>
+                                                <p className="font-black text-slate-800 text-sm">{isPrinterReady ? (userProfile?.printerName || 'Conectada') : 'Desconectada'}</p>
+                                                <p className="text-[10px] font-bold text-emerald-500 mt-0.5 flex items-center gap-1">
+                                                    <span className={`w-2 h-2 rounded-full ${isPrinterReady ? 'bg-emerald-500 animate-pulse' : 'bg-red-400'}`}></span>
+                                                    {isPrinterReady ? 'Lista para imprimir' : 'Requiere vinculación'}
+                                                </p>
+                                            </div>
+                                            <button onClick={handleConnectPrinter} disabled={isProcessing} className="p-3 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-100 active:scale-95 transition-all disabled:opacity-50">
+                                                {isProcessing ? '...' : <Icon name="refresh-cw" size={16}/>}
+                                            </button>
+                                        </div>
+
+                                        <div className="space-y-1.5">
+                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Tamaño del Papel</label>
+                                            <select value={userProfile?.paperSize || '58mm'} onChange={e => handleUpdateSetting('paperSize', e.target.value)} className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold text-slate-700 outline-none focus:border-indigo-500 appearance-none cursor-pointer">
+                                                <option value="58mm">Rollos de 58mm (Pequeña)</option>
+                                                <option value="80mm">Rollos de 80mm (Grande)</option>
+                                            </select>
+                                        </div>
+
+                                        <div className="p-4 bg-blue-50 border border-blue-100 rounded-2xl mt-2">
+                                            <p className="text-[10px] font-bold text-blue-800 leading-relaxed tracking-wide">
+                                                <strong className="uppercase font-black text-blue-900 block mb-1">Impresión Nativa Offline:</strong>
+                                                Ya no necesitas apps de terceros. Activa tu Bluetooth, toca el botón de arriba, selecciona tu impresora y la app se comunicará directamente con ella sin usar internet. <br/><br/><i>Nota: Por seguridad de tu celular, debes vincularla aquí cada vez que recargues la aplicación.</i>
+                                            </p>
+                                        </div>
                                     </div>
                                 </div>
 
