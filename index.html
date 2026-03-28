@@ -210,7 +210,8 @@
             const [cobradorModal, setCobradorModal] = useState(false);
             const [cobradorForm, setCobradorForm] = useState({ name: '', email: '', pass: '', route: 'Todas' });
             const [editCobradorModal, setEditCobradorModal] = useState(false);
-            const [editingCobrador, setEditingCobrador] = useState({ id: '', name: '', route: 'Todas' });
+            const [editingCobrador, setEditingCobrador] = useState({ id: '', name: '', email: '', route: 'Todas' });
+            const [deleteCobradorConfirm, setDeleteCobradorConfirm] = useState(null);
             
             // Estado para el formulario de Nuevo Préstamo
             const [loanForm, setLoanForm] = useState({
@@ -350,6 +351,13 @@
                         setView('login');
                         setUserProfile(null);
                         setAdminUid(null);
+                        // ¡CLAVE! Limpiar toda la memoria al cerrar sesión
+                        setClients([]);
+                        setCobradores([]);
+                        setStoredGains([]);
+                        setSelectedClientId(null);
+                        setReceiptData(null);
+                        setReminderClient(null);
                     }
                 });
                 return () => unsubscribe();
@@ -365,16 +373,23 @@
                         setStoredGains(snap.docs.map(d => ({ id: d.id, ...d.data() })));
                     });
                     return () => { unsubClients(); unsubGains(); };
+                } else {
+                    // Limpiar clientes si no hay adminUid
+                    setClients([]);
+                    setStoredGains([]);
                 }
             }, [adminUid]);
 
             // Obtener lista de cobradores creados por este admin
             useEffect(() => {
-                if (user?.uid && userProfile?.role === 'admin') {
+                if (user?.uid && userProfile?.role !== 'cobrador' && userProfile?.role !== 'empleado') {
                     const unsub = db.collection('users').where('adminUid', '==', user.uid).onSnapshot(snap => {
                         setCobradores(snap.docs.map(d => ({ id: d.id, ...d.data() })));
                     });
                     return () => unsub();
+                } else {
+                    // Vaciar la lista si cambia de cuenta o entra un cobrador
+                    setCobradores([]);
                 }
             }, [user?.uid, userProfile?.role]);
 
@@ -384,12 +399,19 @@
             const handleCreateCobrador = async (e) => {
                 e.preventDefault();
                 setIsProcessing(true);
+                let tempApp = null;
                 try {
-                    let secApp = firebase.apps.find(a => a.name === "Secondary");
-                    if (!secApp) secApp = firebase.initializeApp(firebaseConfig, "Secondary");
+                    // 1. Creamos una app temporal con un nombre único para evitar choques
+                    const tempAppName = "TempApp_" + Date.now();
+                    tempApp = firebase.initializeApp(firebaseConfig, tempAppName);
                     
-                    const res = await secApp.auth().createUserWithEmailAndPassword(cobradorForm.email, cobradorForm.pass);
+                    // 2. Fundamental: Evitar que Firebase guarde la sesión de este cobrador y cierre la tuya
+                    await tempApp.auth().setPersistence('none');
                     
+                    // 3. Crear el usuario en la app temporal
+                    const res = await tempApp.auth().createUserWithEmailAndPassword(cobradorForm.email, cobradorForm.pass);
+                    
+                    // 4. Guardar los datos en Firestore usando la base de datos de tu app PRINCIPAL
                     await db.collection('users').doc(res.user.uid).set({
                         role: 'cobrador',
                         adminUid: user.uid,
@@ -399,13 +421,31 @@
                         createdAt: firebase.firestore.FieldValue.serverTimestamp()
                     });
                     
-                    await secApp.auth().signOut();
                     showNotify("Cobrador creado con éxito");
                     setCobradorModal(false);
                     setCobradorForm({ name: '', email: '', pass: '', route: 'Todas' });
                 } catch(err) {
-                    showNotify("Error: " + err.message);
+                    console.error("Error creando cobrador:", err);
+                    // Mostrar errores específicos en español
+                    if (err.code === 'auth/email-already-in-use') {
+                        showNotify("Error: Este correo ya está registrado.");
+                    } else if (err.code === 'auth/weak-password') {
+                        showNotify("Error: La contraseña debe tener al menos 6 caracteres.");
+                    } else if (err.code === 'auth/invalid-email') {
+                        showNotify("Error: El formato del correo no es válido.");
+                    } else {
+                        showNotify("Error al crear cobrador: " + err.message);
+                    }
                 } finally {
+                    // 5. Autodestrucción obligatoria de la app temporal (haya éxito o error)
+                    if (tempApp) {
+                        try {
+                            await tempApp.auth().signOut();
+                            await tempApp.delete();
+                        } catch(e) {
+                            console.error("Error limpiando la sesión temporal:", e);
+                        }
+                    }
                     setIsProcessing(false);
                 }
             };
@@ -913,6 +953,33 @@
                             </div>
                         </div>
                     )}
+
+                    {deleteCobradorConfirm && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-6">
+                            <div className="bg-white rounded-[2.5rem] p-8 w-full max-w-sm text-center shadow-2xl animate-in">
+                                <div className="w-20 h-20 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-6"><Icon name="trash-2" size={32}/></div>
+                                <h3 className="heading-font text-2xl font-black text-slate-800 mb-2">¿Eliminar Cobrador?</h3>
+                                <p className="text-sm text-slate-500 mb-8 font-medium">Se revocará su acceso a la plataforma. Esta acción no se puede deshacer.</p>
+                                <div className="flex gap-3">
+                                    <button onClick={() => setDeleteCobradorConfirm(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-black text-slate-600 active:scale-95 transition-transform">Cancelar</button>
+                                    <button onClick={async () => {
+                                        if(isProcessing) return;
+                                        setIsProcessing(true);
+                                        try {
+                                            await db.collection('users').doc(deleteCobradorConfirm).delete();
+                                            showNotify("Cobrador eliminado con éxito");
+                                            setDeleteCobradorConfirm(null);
+                                        } catch(e) {
+                                            showNotify("Error al eliminar cobrador");
+                                        } finally {
+                                            setIsProcessing(false);
+                                        }
+                                    }} className="flex-1 py-4 bg-red-500 text-white rounded-2xl font-black shadow-lg shadow-red-500/30 active:scale-95 transition-transform">{isProcessing ? '...' : 'Sí, Eliminar'}</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {refinanceModal && (
                         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[300] flex items-center justify-center p-6">
                             <div className="bg-white rounded-[2.5rem] p-8 w-full max-w-sm shadow-2xl animate-in">
@@ -1978,9 +2045,14 @@
                                                             <p className="font-black text-slate-800">{cob.name}</p>
                                                             <p className="text-[10px] font-bold text-slate-400 mt-1">{cob.email} • Ruta: {cob.assignedRoute}</p>
                                                         </div>
-                                                        <button onClick={() => { setEditingCobrador({ id: cob.id, name: cob.name, route: cob.assignedRoute }); setEditCobradorModal(true); }} className="p-2 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-100 active:scale-95 transition-all shadow-sm border border-indigo-100" title="Cambiar Ruta">
-                                                            <Icon name="map" size={16}/>
-                                                        </button>
+                                                        <div className="flex gap-2">
+                                                            <button onClick={() => { setEditingCobrador({ id: cob.id, name: cob.name, email: cob.email, route: cob.assignedRoute }); setEditCobradorModal(true); }} className="p-2 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-100 active:scale-95 transition-all shadow-sm border border-indigo-100" title="Editar Perfil y Ruta">
+                                                                <Icon name="settings" size={16}/>
+                                                            </button>
+                                                            <button onClick={() => setDeleteCobradorConfirm(cob.id)} className="p-2 bg-red-50 text-red-600 rounded-xl hover:bg-red-100 active:scale-95 transition-all shadow-sm border border-red-100" title="Eliminar Cobrador">
+                                                                <Icon name="trash-2" size={16}/>
+                                                            </button>
+                                                        </div>
                                                     </div>
                                                 ))}
                                             </div>
@@ -2073,21 +2145,40 @@
                                     if(isProcessing) return;
                                     setIsProcessing(true);
                                     try {
-                                        await db.collection('users').doc(editingCobrador.id).update({ assignedRoute: editingCobrador.route });
+                                        await db.collection('users').doc(editingCobrador.id).update({ 
+                                            name: editingCobrador.name,
+                                            email: editingCobrador.email,
+                                            assignedRoute: editingCobrador.route 
+                                        });
                                         setEditCobradorModal(false);
-                                        showNotify("Ruta de cobrador actualizada");
+                                        showNotify("Cobrador actualizado exitosamente");
                                     } catch(err) {
-                                        showNotify("Error al actualizar la ruta");
+                                        showNotify("Error al actualizar cobrador");
                                     } finally {
                                         setIsProcessing(false);
                                     }
                                 }} className="space-y-4">
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Nombre</label>
+                                        <input type="text" value={editingCobrador.name} onChange={e => setEditingCobrador({...editingCobrador, name: e.target.value})} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold outline-none focus:border-indigo-500" required />
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Correo Visual</label>
+                                        <input type="email" value={editingCobrador.email} onChange={e => setEditingCobrador({...editingCobrador, email: e.target.value})} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold outline-none focus:border-indigo-500" required />
+                                    </div>
                                     <div className="space-y-1.5">
                                         <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Asignar Nueva Ruta</label>
                                         <select value={editingCobrador.route} onChange={e => setEditingCobrador({...editingCobrador, route: e.target.value})} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold outline-none focus:border-indigo-500 appearance-none cursor-pointer text-indigo-700">
                                             <option value="Todas">Acceso a Todas las Rutas</option>
                                             {routesList.map((r, i) => <option key={i} value={r}>{r}</option>)}
                                         </select>
+                                    </div>
+
+                                    <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl mt-2">
+                                        <p className="text-[9px] font-bold text-amber-700 leading-relaxed uppercase tracking-widest">
+                                            <Icon name="alert-triangle" size={12} className="inline mr-1 -mt-0.5"/> 
+                                            Cambiar el correo solo actualiza la base de datos visualmente. Para cambiar su inicio de sesión, debes eliminar este cobrador y crear uno nuevo.
+                                        </p>
                                     </div>
                                     
                                     <div className="flex gap-3 mt-6">
