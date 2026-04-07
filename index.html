@@ -528,6 +528,17 @@
                         db.collection('users').doc(usr.uid).onSnapshot(doc => {
                             if (doc.exists) {
                                 const profile = doc.data();
+                                
+                                // ¡SOLUCIÓN AQUÍ!
+                                // Si el documento existe (por guardar ajustes) pero no tiene rol, 
+                                // forzamos automáticamente a que sea Admin. Los cobradores siempre 
+                                // tienen su rol definido al crearse, así que esto es 100% seguro.
+                                if (!profile.role) {
+                                    profile.role = 'admin';
+                                    // Opcional: Escribirlo de vuelta en Firebase para que quede fijo
+                                    db.collection('users').doc(usr.uid).set({ role: 'admin' }, { merge: true });
+                                }
+
                                 // Bloqueo estricto para cobradores eliminados
                                 if (profile.status === 'deleted' || profile.role === 'disabled') {
                                     auth.signOut();
