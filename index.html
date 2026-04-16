@@ -32,10 +32,28 @@
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                const swCode = "self.addEventListener('fetch', function(e) {});";
+                const swCode = `
+                    const CACHE_NAME = 'connect-pro-v1';
+                    const ASSETS = [
+                        '/',
+                        'https://cdn.tailwindcss.com',
+                        'https://unpkg.com/react@18/umd/react.production.min.js',
+                        'https://unpkg.com/react-dom@18/umd/react-dom.production.min.js',
+                        'https://unpkg.com/@babel/standalone/babel.min.js',
+                        'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'
+                    ];
+                    self.addEventListener('install', e => {
+                        e.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)));
+                    });
+                    self.addEventListener('fetch', e => {
+                        e.respondWith(
+                            caches.match(e.request).then(res => res || fetch(e.request))
+                        );
+                    });
+                `;
                 const blob = new Blob([swCode], { type: 'application/javascript' });
                 navigator.serviceWorker.register(URL.createObjectURL(blob)).catch(err => {
-                    console.log('Nota PWA: Para instalación nativa total, requiere un servidor HTTPS real.');
+                    console.log('SW Error:', err);
                 });
             });
         }
@@ -112,7 +130,7 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useRef, useMemo, startTransition } = React;
+        const { useState, useEffect, useRef, useMemo } = React;
 
         const firebaseConfig = {
             apiKey: "AIzaSyDid8PFmp7fKbLjFSn7mzMcrIfDgjEGwLM",
@@ -159,6 +177,7 @@
                 "user-plus": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>,
                 "arrow-left": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>,
                 "trending-up": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>,
+                "map-pin": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>,
                 "check-circle-2": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="12" cy="12" r="10"/><path d="M8 12.5l3 3 5-6"/></svg>,
                 "share-2": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>,
                 "x": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
@@ -213,6 +232,7 @@
             const [portfolioSearch, setPortfolioSearch] = useState('');
             const [portfolioFilter, setPortfolioFilter] = useState('all');
             const [portfolioRouteFilter, setPortfolioRouteFilter] = useState('Todas');
+            const [visibleClientsCount, setVisibleClientsCount] = useState(20); // NUEVO: Paginación
 
             const [moraConfirm, setMoraConfirm] = useState(false);
             const [customMoraAmount, setCustomMoraAmount] = useState('');
@@ -225,6 +245,9 @@
             const [newPassword, setNewPassword] = useState('');
             const [newClientImage, setNewClientImage] = useState(null);
             
+            // Estado para guardar temporalmente la ubicación al crear/editar cliente
+            const [clientLocation, setClientLocation] = useState(null);
+
             const [refinanceModal, setRefinanceModal] = useState(false);
             const [refinanceForm, setRefinanceForm] = useState({ amount: '', interest: '', inst: '' });
 
@@ -246,6 +269,10 @@
                 amount: '', interest: '', installments: '1', type: 'Amortizado', interestType: 'Fijo', frequency: 'Mensual', startDate: new Date().toISOString().split('T')[0]
             });
 
+            // NUEVOS ESTADOS PARA FECHAS DE GANANCIAS
+            const [earningsStartDate, setEarningsStartDate] = useState('');
+            const [earningsEndDate, setEarningsEndDate] = useState('');
+
             // ==========================================
             // AJUSTES PERSONALIZADOS DINÁMICOS
             // ==========================================
@@ -260,6 +287,34 @@
                     // Los ajustes globales siempre van al documento del Admin (dueño)
                     if(adminUid && isOnline) await db.collection('users').doc(adminUid).set({ [field]: value }, { merge: true });
                 } catch (e) { console.error("Error al actualizar ajuste", e); }
+            };
+
+            // FUNCION PARA OBTENER UBICACION GPS NATIVA
+            const captureLocation = () => {
+                if (!navigator.geolocation) {
+                    showNotify("Tu navegador no soporta GPS");
+                    return;
+                }
+                setIsProcessing(true);
+                showNotify("Obteniendo ubicación satelital...");
+                
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        setClientLocation({
+                            lat: position.coords.latitude,
+                            lng: position.coords.longitude
+                        });
+                        showNotify("¡Ubicación guardada con éxito!");
+                        setIsProcessing(false);
+                    },
+                    (error) => {
+                        console.error(error);
+                        setIsProcessing(false);
+                        if(error.code === 1) showNotify("Permiso de ubicación denegado");
+                        else showNotify("Error obteniendo el GPS. Activa tu ubicación.");
+                    },
+                    { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+                );
             };
 
             // ==========================================
@@ -507,6 +562,9 @@
                 return new Date();
             };
 
+            // FUNCION UTILITARIA PARA BUSQUEDA SIN TILDES
+            const normalizeStr = (str) => str ? str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase() : '';
+
             const calculateNextDate = (currentDateStr, frequency) => {
                 if (!currentDateStr || currentDateStr.includes('NaN')) currentDateStr = formatDate(new Date());
                 const parts = currentDateStr.split('/');
@@ -663,18 +721,6 @@
                         }
                     }
                     setIsProcessing(false);
-                }
-            };
-
-            const handleImageUpload = (e) => {
-                const file = e.target.files[0];
-                if (file && adminUid) {
-                    const reader = new FileReader();
-                    reader.onload = (ev) => {
-                        const p = db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({ idImage: ev.target.result });
-                        if(isOnline) p.catch(e => console.log("Upload error offline"));
-                    };
-                    reader.readAsDataURL(file);
                 }
             };
 
@@ -947,23 +993,14 @@
                 return acc;
             }, 0), [displayedClients]);
             
-            const totalCollectedToday = useMemo(() => {
-                let total = 0;
-                const todayFormatted = new Date().toLocaleDateString('es-DO');
-                displayedClients.forEach(c => {
-                    c.history?.forEach(h => {
-                        if (h.date && h.date.split(',')[0].trim() === todayFormatted && !h.archivedGain) {
-                            total += parseFloat(h.amount) || 0;
-                        }
-                    });
-                });
-                return total;
-            }, [displayedClients]);
-
-            const monthlyExpected = useMemo(() => displayedClients.reduce((acc, curr) => acc + (curr.loan ? (curr.totalDebt || 0) : 0), 0), [displayedClients]);
-            
             const monthlyCollected = useMemo(() => storedGains.reduce((acc, curr) => acc + curr.totalValue, 0), [storedGains]);
             const monthlyGains = useMemo(() => storedGains.reduce((acc, curr) => acc + curr.gainAmount, 0), [storedGains]);
+
+            // OPTIMIZADO: Cálculo más rápido de lo cobrado hoy usando la colección de ganancias
+            const totalCollectedToday = useMemo(() => {
+                const todayFormatted = new Date().toLocaleDateString('es-DO');
+                return storedGains.filter(g => g.date && g.date.split(',')[0].trim() === todayFormatted).reduce((acc, g) => acc + (g.totalValue || 0), 0);
+            }, [storedGains]);
 
             const allGainsBreakdown = useMemo(() => {
                 const list = [...storedGains];
@@ -984,19 +1021,35 @@
             }, [displayedClients, storedGains]);
 
             const filteredGains = useMemo(() => {
-                const search = earningsSearch.toLowerCase();
+                const search = normalizeStr(earningsSearch);
                 return allGainsBreakdown.filter(g => {
                     const matchStatus = earningsFilter === 'todas' || g.status === earningsFilter;
-                    const matchSearch = g.clientName.toLowerCase().includes(search);
-                    return matchStatus && matchSearch;
+                    const matchSearch = normalizeStr(g.clientName).includes(search);
+                    
+                    let matchDate = true;
+                    if (g.date !== 'Pendiente') {
+                        const gDateObj = parseDateString(g.date);
+                        if (earningsStartDate) {
+                            const startObj = new Date(earningsStartDate + 'T00:00:00');
+                            if (gDateObj < startObj) matchDate = false;
+                        }
+                        if (earningsEndDate) {
+                            const endObj = new Date(earningsEndDate + 'T23:59:59');
+                            if (gDateObj > endObj) matchDate = false;
+                        }
+                    } else if (earningsStartDate || earningsEndDate) {
+                        matchDate = false; // Si filtramos por fecha, ocultamos los "Pendientes"
+                    }
+                    
+                    return matchStatus && matchSearch && matchDate;
                 });
-            }, [allGainsBreakdown, earningsFilter, earningsSearch]);
+            }, [allGainsBreakdown, earningsFilter, earningsSearch, earningsStartDate, earningsEndDate]);
 
             // Filtrado específico para la Cartera
             const portfolioFilteredClients = useMemo(() => {
-                const s = portfolioSearch.toLowerCase();
+                const s = normalizeStr(portfolioSearch);
                 let filtered = displayedClients.filter(c => {
-                    const matchSearch = c.name.toLowerCase().includes(s) || (c.cedula && c.cedula.includes(s)) || (c.phone && c.phone.includes(s)) || (c.address && c.address.toLowerCase().includes(s));
+                    const matchSearch = normalizeStr(c.name).includes(s) || normalizeStr(c.cedula).includes(s) || normalizeStr(c.phone).includes(s) || normalizeStr(c.address).includes(s);
                     let matchFilter = true;
                     if (portfolioFilter === 'active') matchFilter = c.loan && c.totalDebt > 0 && c.status !== 'pending_approval';
                     if (portfolioFilter === 'inactive') matchFilter = (!c.loan || c.totalDebt <= 0) && c.status !== 'pending_approval';
@@ -1420,7 +1473,7 @@
                                 </div>
                                 <div className="relative">
                                     <Icon name="search" className="absolute left-4 top-4 text-slate-300" size={18} />
-                                    <input type="text" placeholder="Buscar por nombre, cédula o teléfono..." className="w-full pl-12 p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-xs outline-none focus:border-indigo-500 shadow-sm" value={portfolioSearch} onChange={e => setPortfolioSearch(e.target.value)} />
+                                    <input type="text" placeholder="Buscar por nombre, cédula o teléfono..." className="w-full pl-12 p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-xs outline-none focus:border-indigo-500 shadow-sm" value={portfolioSearch} onChange={e => { setPortfolioSearch(e.target.value); setVisibleClientsCount(20); }} />
                                 </div>
                             </header>
                             
@@ -1447,7 +1500,7 @@
                             </div>
 
                             <main className="p-6 pt-2 space-y-4 pb-24">
-                                {portfolioFilteredClients.map(c => {
+                                {portfolioFilteredClients.slice(0, visibleClientsCount).map(c => {
                                     let statusText = 'SIN PRÉSTAMO'; let statusColor = 'bg-slate-100 text-slate-500 border-slate-200';
                                     if (c.status === 'pending_approval' || c.pendingLoan) {
                                         statusText = 'PENDIENTE APROB.'; statusColor = 'bg-amber-100 text-amber-600 border-amber-200 animate-pulse';
@@ -1488,6 +1541,13 @@
                                         </div>
                                     </div>
                                 )})}
+                                
+                                {portfolioFilteredClients.length > visibleClientsCount && (
+                                    <button onClick={() => setVisibleClientsCount(prev => prev + 20)} className="w-full py-4 bg-indigo-50 text-indigo-600 rounded-2xl font-black text-sm active:scale-95 transition-transform mt-2 border border-indigo-100 shadow-sm">
+                                        Cargar más clientes ({portfolioFilteredClients.length - visibleClientsCount} restantes)
+                                    </button>
+                                )}
+
                                 {portfolioFilteredClients.length === 0 && (
                                     <div className="text-center py-10">
                                         <div className="w-16 h-16 bg-slate-100 text-slate-300 rounded-full flex items-center justify-center mx-auto mb-3"><Icon name="users" size={24}/></div>
@@ -1547,6 +1607,23 @@
                                         </select>
                                     </div>
 
+                                    {/* NUEVO: FILTROS DE FECHAS */}
+                                    <div className="flex gap-3 no-print mt-2 mb-4">
+                                        <div className="flex-1">
+                                            <label className="text-[9px] font-black uppercase text-slate-400 ml-1">Desde</label>
+                                            <input type="date" value={earningsStartDate} onChange={e => setEarningsStartDate(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-xs font-bold text-slate-600 outline-none focus:border-indigo-500" />
+                                        </div>
+                                        <div className="flex-1">
+                                            <label className="text-[9px] font-black uppercase text-slate-400 ml-1">Hasta</label>
+                                            <input type="date" value={earningsEndDate} onChange={e => setEarningsEndDate(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-xs font-bold text-slate-600 outline-none focus:border-indigo-500" />
+                                        </div>
+                                        {(earningsStartDate || earningsEndDate) && (
+                                            <div className="flex items-end">
+                                                <button onClick={() => {setEarningsStartDate(''); setEarningsEndDate('');}} className="p-3 mb-0.5 bg-red-50 text-red-500 rounded-xl active:scale-95"><Icon name="x" size={16}/></button>
+                                            </div>
+                                        )}
+                                    </div>
+
                                     <div className="space-y-2">
                                         {filteredGains.length === 0 ? (
                                             <p className="text-center text-xs font-bold text-slate-400 py-10">No hay movimientos registrados.</p>
@@ -1573,7 +1650,7 @@
                     {view === 'add_client' && (
                         <div className="animate-in bg-white min-h-screen">
                             <header className="p-6 border-b flex items-center gap-4 bg-white sticky top-0 z-10 shadow-sm">
-                                <button onClick={() => { setView('dashboard'); setNewClientImage(null); }} className="p-3 text-slate-400 bg-slate-50 rounded-2xl"><Icon name="arrow-left"/></button>
+                                <button onClick={() => { setView('dashboard'); setNewClientImage(null); setClientLocation(null); }} className="p-3 text-slate-400 bg-slate-50 rounded-2xl"><Icon name="arrow-left"/></button>
                                 <h2 className="heading-font text-xl font-black text-slate-800">Nuevo Cliente</h2>
                             </header>
                             <form onSubmit={async (e) => { 
@@ -1581,13 +1658,15 @@
                                 const data = { 
                                     name: e.target.name.value, cedula: e.target.cedula.value, phone: e.target.phone.value, email: e.target.email.value, address: e.target.address.value, 
                                     route: e.target.route.value,
-                                    idImage: newClientImage, totalDebt: 0, history: [], loan: null, 
+                                    idImage: newClientImage,
+                                    location: clientLocation, // Guardar la coordenada GPS
+                                    totalDebt: 0, history: [], loan: null, 
                                     status: userProfile?.role === 'admin' ? 'active' : 'pending_approval',
                                     createdAt: firebase.firestore.FieldValue.serverTimestamp() 
                                 }; 
                                 const p = db.collection('users').doc(adminUid).collection('clients').add(data); 
                                 if(isOnline) await p.catch(e=>console.log(e));
-                                setView('dashboard'); setNewClientImage(null); showNotify(userProfile?.role === 'admin' ? "Registrado correctamente" : "Enviado para aprobación"); 
+                                setView('dashboard'); setNewClientImage(null); setClientLocation(null); showNotify(userProfile?.role === 'admin' ? "Registrado correctamente" : "Enviado para aprobación"); 
                             }} className="p-8 space-y-5">
                                 <div className="space-y-1.5">
                                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Foto / Documento de Identidad</label>
@@ -1628,7 +1707,22 @@
                                     <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">WhatsApp</label><input name="phone" type="tel" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500" required /></div>
                                 </div>
                                 <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Correo</label><input name="email" type="email" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500" /></div>
-                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Dirección</label><textarea name="address" rows="3" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500"></textarea></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Dirección Física</label><textarea name="address" rows="3" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500"></textarea></div>
+                                
+                                {/* NUEVO BOTON GPS */}
+                                <div className="space-y-1.5 pt-2">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Ubicación GPS (Opcional)</label>
+                                    <div className="flex gap-2">
+                                        <button type="button" onClick={captureLocation} disabled={isProcessing} className={`flex-1 p-4 rounded-2xl font-black text-sm flex items-center justify-center gap-2 active:scale-95 transition-all border ${clientLocation ? 'bg-emerald-50 text-emerald-600 border-emerald-200 shadow-inner' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}>
+                                            <Icon name="map-pin" size={18}/> {clientLocation ? 'GPS Capturado ✓' : 'Capturar Mi Ubicación Actual'}
+                                        </button>
+                                        {clientLocation && (
+                                            <button type="button" onClick={() => setClientLocation(null)} className="p-4 bg-red-50 text-red-500 rounded-2xl border border-red-100 active:scale-95"><Icon name="trash-2"/></button>
+                                        )}
+                                    </div>
+                                    <p className="text-[9px] font-bold text-slate-400 px-2 mt-1">Presiona esto cuando estés en la casa/negocio del cliente para guardar la coordenada satelital exacta.</p>
+                                </div>
+
                                 <button type="submit" className="w-full bg-indigo-600 text-white p-5 rounded-[2.2rem] font-black text-lg shadow-xl shadow-indigo-600/30 active:scale-95 transition-transform mt-4">Guardar Cliente</button>
                             </form>
                         </div>
@@ -1636,12 +1730,19 @@
 
                     {view === 'edit_client' && selectedClient && (
                         <div className="animate-in bg-white min-h-screen">
-                            <header className="p-6 border-b flex items-center gap-4 bg-white sticky top-0 z-10 shadow-sm"><button onClick={() => setView('profile')} className="p-3 text-slate-400 bg-slate-50 rounded-2xl"><Icon name="arrow-left"/></button><h2 className="heading-font text-xl font-black text-slate-800">Editar Cliente</h2></header>
+                            <header className="p-6 border-b flex items-center gap-4 bg-white sticky top-0 z-10 shadow-sm">
+                                <button onClick={() => { setView('profile'); setClientLocation(null); }} className="p-3 text-slate-400 bg-slate-50 rounded-2xl"><Icon name="arrow-left"/></button>
+                                <h2 className="heading-font text-xl font-black text-slate-800">Editar Cliente</h2>
+                            </header>
                             <form onSubmit={async (e) => { 
                                 e.preventDefault(); 
-                                const p = db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({ name: e.target.name.value, cedula: e.target.cedula.value, phone: e.target.phone.value, email: e.target.email.value, address: e.target.address.value, route: e.target.route.value }); 
+                                const updateData = { name: e.target.name.value, cedula: e.target.cedula.value, phone: e.target.phone.value, email: e.target.email.value, address: e.target.address.value, route: e.target.route.value };
+                                // Si se capturó una nueva ubicación en el formulario, actualizarla.
+                                if (clientLocation) updateData.location = clientLocation;
+
+                                const p = db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update(updateData); 
                                 if(isOnline) await p.catch(e=>e);
-                                setView('profile'); showNotify("Datos actualizados"); 
+                                setView('profile'); setClientLocation(null); showNotify("Datos actualizados"); 
                             }} className="p-8 space-y-5">
                                 <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Nombre Completo</label><input name="name" defaultValue={selectedClient.name} type="text" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500" required /></div>
                                 <div className="space-y-1.5">
@@ -1657,7 +1758,26 @@
                                     <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">WhatsApp</label><input name="phone" defaultValue={selectedClient.phone} type="tel" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500" required /></div>
                                 </div>
                                 <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Correo</label><input name="email" defaultValue={selectedClient.email} type="email" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500" /></div>
-                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Dirección</label><textarea name="address" defaultValue={selectedClient.address} rows="3" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500"></textarea></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Dirección Física</label><textarea name="address" defaultValue={selectedClient.address} rows="3" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500"></textarea></div>
+                                
+                                {/* BOTON GPS EN EDITAR */}
+                                <div className="space-y-1.5 pt-2">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Ubicación GPS (Opcional)</label>
+                                    <div className="flex gap-2">
+                                        <button type="button" onClick={captureLocation} disabled={isProcessing} className={`flex-1 p-4 rounded-2xl font-black text-sm flex items-center justify-center gap-2 active:scale-95 transition-all border ${(clientLocation || selectedClient.location) ? 'bg-emerald-50 text-emerald-600 border-emerald-200 shadow-inner' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}>
+                                            <Icon name="map-pin" size={18}/> {clientLocation ? 'Nueva Ubicación Lista ✓' : (selectedClient.location ? 'GPS ya registrado (Actualizar)' : 'Capturar Mi Ubicación Actual')}
+                                        </button>
+                                        {(clientLocation || selectedClient.location) && (
+                                            <button type="button" onClick={async () => {
+                                                setClientLocation(null);
+                                                if(selectedClient.location) await db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({ location: firebase.firestore.FieldValue.delete() });
+                                                showNotify("Ubicación borrada");
+                                            }} className="p-4 bg-red-50 text-red-500 rounded-2xl border border-red-100 active:scale-95"><Icon name="trash-2"/></button>
+                                        )}
+                                    </div>
+                                    <p className="text-[9px] font-bold text-slate-400 px-2 mt-1">Presiona esto si quieres actualizar las coordenadas a tu ubicación actual.</p>
+                                </div>
+
                                 <button type="submit" className="w-full bg-indigo-600 text-white p-5 rounded-[2.2rem] font-black text-lg shadow-xl shadow-indigo-600/30 active:scale-95 transition-transform mt-4">Actualizar</button>
                                 {userProfile?.role !== 'empleado' && userProfile?.role !== 'cobrador' && (
                                     <button type="button" onClick={() => { setView('profile'); setDeleteConfirm(selectedClientId); }} className="w-full bg-red-50 text-red-500 p-5 rounded-[2.2rem] font-black text-sm active:scale-95 transition-transform mt-2 border border-red-100">Eliminar Cliente Definitivamente</button>
@@ -1721,10 +1841,20 @@
                                         )}
                                     </div>
                                     <h3 className="heading-font text-2xl font-black text-slate-800 leading-tight mt-2">{selectedClient.name}</h3>
-                                    <a href={`https://wa.me/${selectedClient.phone.replace(/\D/g, '').length === 10 ? '1' + selectedClient.phone.replace(/\D/g, '') : selectedClient.phone.replace(/\D/g, '')}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center justify-center gap-2 bg-emerald-50 text-emerald-600 px-4 py-1.5 rounded-full font-bold text-sm mt-2 mb-6 hover:bg-emerald-100 active:scale-95 transition-all border border-emerald-100 shadow-sm">
-                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
-                                        WhatsApp: {selectedClient.phone}
-                                    </a>
+                                    
+                                    <div className="flex flex-wrap justify-center gap-2 mt-2 mb-6">
+                                        <a href={`https://wa.me/${selectedClient.phone.replace(/\D/g, '').length === 10 ? '1' + selectedClient.phone.replace(/\D/g, '') : selectedClient.phone.replace(/\D/g, '')}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center justify-center gap-2 bg-emerald-50 text-emerald-600 px-4 py-1.5 rounded-full font-bold text-sm hover:bg-emerald-100 active:scale-95 transition-all border border-emerald-100 shadow-sm">
+                                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+                                            WhatsApp
+                                        </a>
+                                        
+                                        {/* NUEVO BOTON NAVEGAR */}
+                                        {selectedClient.location && (
+                                            <a href={`https://maps.google.com/?q=${selectedClient.location.lat},${selectedClient.location.lng}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center justify-center gap-1.5 bg-blue-50 text-blue-600 px-4 py-1.5 rounded-full font-bold text-sm hover:bg-blue-100 active:scale-95 transition-all border border-blue-100 shadow-sm">
+                                                <Icon name="map-pin" size={14}/> Ir al Domicilio
+                                            </a>
+                                        )}
+                                    </div>
                                     
                                     {selectedClient.status === 'pending_approval' && (
                                         <div className="w-full bg-amber-50 p-6 rounded-[2rem] border border-amber-200 text-center mb-6 shadow-inner">
