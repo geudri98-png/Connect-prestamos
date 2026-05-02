@@ -256,12 +256,14 @@
             const [earningsTab, setEarningsTab] = useState('operaciones');
 
             const [deleteConfirm, setDeleteConfirm] = useState(null);
+            const [deleteRouteConfirm, setDeleteRouteConfirm] = useState(null);
             const [deletePaymentConfirm, setDeletePaymentConfirm] = useState(null);
             const [clearHistoryConfirm, setClearHistoryConfirm] = useState(false);
             const [portfolioSearch, setPortfolioSearch] = useState('');
             const [portfolioFilter, setPortfolioFilter] = useState('all');
             const [portfolioRouteFilter, setPortfolioRouteFilter] = useState('Todas');
             const [visibleClientsCount, setVisibleClientsCount] = useState(20); 
+            const [expandedClient, setExpandedClient] = useState(null);
 
             const [moraConfirm, setMoraConfirm] = useState(false);
             const [customMoraAmount, setCustomMoraAmount] = useState('');
@@ -291,6 +293,7 @@
             const [isPrinterReady, setIsPrinterReady] = useState(false);
 
             const [newRouteInput, setNewRouteInput] = useState('');
+            const [expandedRoute, setExpandedRoute] = useState(null);
             const [cobradorModal, setCobradorModal] = useState(false);
             const [cobradorForm, setCobradorForm] = useState({ name: '', email: '', pass: '', route: 'Todas' });
             const [editCobradorModal, setEditCobradorModal] = useState(false);
@@ -1279,6 +1282,34 @@
                             </div>
                         </div>
                     )}
+                    
+                    {deleteRouteConfirm && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-6">
+                            <div className="bg-white rounded-[2.5rem] p-8 w-full max-w-sm text-center shadow-2xl animate-in">
+                                <div className="w-20 h-20 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-6"><Icon name="trash-2" size={32}/></div>
+                                <h3 className="heading-font text-2xl font-black text-slate-800 mb-2">¿Eliminar Ruta?</h3>
+                                <p className="text-sm text-slate-500 mb-8 font-medium">Estás a punto de borrar la ruta "{deleteRouteConfirm}".</p>
+                                <div className="flex gap-3">
+                                    <button onClick={() => setDeleteRouteConfirm(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-black text-slate-600 active:scale-95 transition-transform">Cancelar</button>
+                                    <button onClick={async () => {
+                                        if (!isOnline) return showNotify("Se requiere conexión a Internet");
+                                        setIsProcessing(true);
+                                        const updatedRoutes = routesList.filter(r => r !== deleteRouteConfirm);
+                                        try {
+                                            await handleUpdateSetting('routes', updatedRoutes);
+                                            showNotify("Ruta eliminada correctamente");
+                                        } catch (err) {
+                                            showNotify("Error al eliminar");
+                                        } finally {
+                                            setIsProcessing(false);
+                                            setDeleteRouteConfirm(null);
+                                        }
+                                    }} disabled={isProcessing} className="flex-1 py-4 bg-red-500 text-white rounded-2xl font-black shadow-lg shadow-red-500/30 active:scale-95 transition-transform disabled:opacity-50">{isProcessing ? '...' : 'Sí, Eliminar'}</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {deletePaymentConfirm && (
                         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-6">
                             <div className="bg-white rounded-[2.5rem] p-8 w-full max-w-sm text-center shadow-2xl animate-in">
@@ -1827,31 +1858,63 @@
                                         }
                                     }
                                     return (
-                                    <div key={c.id} onClick={() => { setSelectedClientId(c.id); setView('profile'); }} className="p-5 bg-white border border-slate-200 rounded-[2rem] shadow-sm flex flex-col gap-3 cursor-pointer active:scale-[0.98] transition-all hover:border-indigo-300 relative overflow-hidden">
-                                        <div className="absolute top-0 right-0 bg-slate-100 text-slate-400 text-[8px] font-black px-3 py-1 rounded-bl-xl uppercase tracking-widest"><Icon name="map" size={10} className="inline mr-1"/>{c.route || 'General'}</div>
-                                        
-                                        <div className="flex justify-between items-start mt-2">
+                                    <div key={c.id} className="bg-white border border-slate-200 rounded-[1.5rem] shadow-sm overflow-hidden transition-all hover:border-indigo-300">
+                                        {/* Cabecera del Acordeón (Click para expandir) */}
+                                        <div onClick={() => setExpandedClient(expandedClient === c.id ? null : c.id)} className="p-4 flex justify-between items-center cursor-pointer hover:bg-slate-50 active:bg-slate-100 transition-colors">
                                             <div className="flex gap-3 items-center">
-                                                <div className="w-12 h-12 rounded-[1.2rem] flex items-center justify-center font-black text-lg bg-indigo-50 text-indigo-600 border border-indigo-100">{c.name[0]}</div>
+                                                <div className="w-10 h-10 rounded-[1rem] flex items-center justify-center font-black text-sm bg-indigo-50 text-indigo-600 border border-indigo-100">{c.name[0]}</div>
                                                 <div>
-                                                    <h4 className="font-black text-slate-800 text-sm leading-tight">{c.name}</h4>
-                                                    <p className="text-[10px] font-bold text-slate-400 mt-0.5">{c.phone}</p>
+                                                    <h4 className="font-black text-slate-800 text-sm leading-tight max-w-[130px] truncate">{c.name}</h4>
+                                                    <p className={`text-[10px] font-black tracking-widest mt-0.5 ${c.totalDebt > 0.1 ? 'text-slate-500' : 'text-emerald-500'}`}>
+                                                        {c.totalDebt > 0.1 ? `${currency}${(c.totalDebt || 0).toLocaleString()} DEUDA` : 'SIN DEUDA'}
+                                                    </p>
                                                 </div>
                                             </div>
-                                            <span className={`text-[8px] font-black uppercase tracking-widest px-2.5 py-1 rounded-lg border ${statusColor}`}>{statusText}</span>
-                                        </div>
-                                        <div className="bg-slate-50 rounded-2xl p-4 flex justify-between items-center border border-slate-100">
-                                            <div>
-                                                <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Balance Pendiente</p>
-                                                <p className={`font-black text-lg ${c.totalDebt > 0.1 ? 'text-slate-800' : 'text-emerald-500'}`}>{currency}{(c.totalDebt || 0).toLocaleString()}</p>
-                                            </div>
-                                            {c.loan && c.totalDebt > 0.1 && (
-                                                <div className="text-right">
-                                                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Próx. Cobro</p>
-                                                    <p className={`font-black text-sm ${statusText === 'EN MORA' ? 'text-red-500' : 'text-indigo-600'}`}>{c.loan.nextPaymentDate?.includes('NaN') ? 'Pendiente' : c.loan.nextPaymentDate}</p>
+                                            <div className="flex items-center gap-2">
+                                                <span className={`text-[7px] sm:text-[8px] font-black uppercase tracking-widest px-2 py-1 rounded-md border ${statusColor}`}>{statusText}</span>
+                                                <div className={`w-6 h-6 flex flex-shrink-0 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-transform ${expandedClient === c.id ? 'rotate-90' : '-rotate-90'}`}>
+                                                    <Icon name="arrow-left" size={14} />
                                                 </div>
-                                            )}
+                                            </div>
                                         </div>
+
+                                        {/* Cuerpo del Acordeón (Visible al expandir) */}
+                                        {expandedClient === c.id && (
+                                            <div className="p-4 pt-2 bg-slate-50 border-t border-slate-100 animate-in">
+                                                <div className="flex justify-between items-center mb-3 px-1">
+                                                    <div className="flex items-center gap-1 text-[9px] font-black uppercase tracking-widest text-slate-400">
+                                                        <Icon name="map" size={10} className="text-slate-400"/> {c.route || 'General'}
+                                                    </div>
+                                                    <div className="flex items-center gap-1 text-[9px] font-black uppercase tracking-widest text-slate-400">
+                                                        Cel: {c.phone}
+                                                    </div>
+                                                </div>
+                                                
+                                                {c.loan && c.totalDebt > 0.1 && (
+                                                    <div className="bg-white rounded-xl p-3 flex justify-between items-center border border-slate-200 mb-3 shadow-sm">
+                                                        <div>
+                                                            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-0.5">Próx. Cobro</p>
+                                                            <p className={`font-bold text-xs ${statusText === 'EN MORA' ? 'text-red-500' : 'text-indigo-600'}`}>{c.loan.nextPaymentDate?.includes('NaN') ? 'Pendiente' : c.loan.nextPaymentDate}</p>
+                                                        </div>
+                                                        <div className="text-right">
+                                                            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-0.5">Cuota Sugerida</p>
+                                                            <p className="font-bold text-xs text-slate-700">{currency}{Math.round(c.loan.installmentAmount).toLocaleString()}</p>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                                
+                                                <div className="flex gap-2 mt-1">
+                                                    <button onClick={() => { setSelectedClientId(c.id); setView('profile'); }} className="flex-1 bg-indigo-100 text-indigo-600 py-3 rounded-xl font-black text-[11px] uppercase tracking-widest active:scale-95 transition-transform flex items-center justify-center gap-2 border border-indigo-200">
+                                                        <Icon name="file-text" size={14}/> Ver Perfil
+                                                    </button>
+                                                    {(c.loan && c.totalDebt > 0.1) && (
+                                                        <button onClick={() => { setSelectedClientId(c.id); setTransactionType('Interés'); setIsTransacting(true); }} className="flex-[0.5] bg-emerald-500 text-white py-3 rounded-xl font-black text-[11px] uppercase tracking-widest active:scale-95 transition-transform flex items-center justify-center gap-1 shadow-md shadow-emerald-200">
+                                                            <Icon name="wallet" size={14}/> Cobrar
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
                                 )})}
                                 
@@ -1969,6 +2032,73 @@
                                 </div>
 
                                 <button type="submit" className="w-full bg-indigo-600 text-white p-5 rounded-[2.2rem] font-black text-lg shadow-xl shadow-indigo-600/30 active:scale-95 transition-transform mt-4">Guardar Cliente</button>
+                            </form>
+                        </div>
+                    )}
+
+                    {/* EDITAR CLIENTE */}
+                    {view === 'edit_client' && selectedClient && (
+                        <div className="animate-in bg-white min-h-screen">
+                            <header className="p-6 border-b flex items-center gap-4 bg-white sticky top-0 z-10 shadow-sm">
+                                <button onClick={() => setView('profile')} className="p-3 text-slate-400 bg-slate-50 rounded-2xl"><Icon name="arrow-left"/></button>
+                                <h2 className="heading-font text-xl font-black text-slate-800">Editar Cliente</h2>
+                            </header>
+                            <form onSubmit={async (e) => { 
+                                e.preventDefault(); 
+                                if(isProcessing) return;
+                                setIsProcessing(true);
+                                try {
+                                    const updatedData = { 
+                                        name: e.target.name.value, 
+                                        cedula: e.target.cedula.value, 
+                                        phone: e.target.phone.value, 
+                                        email: e.target.email.value, 
+                                        address: e.target.address.value, 
+                                        route: e.target.route.value,
+                                        location: clientLocation
+                                    }; 
+                                    const p = db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update(updatedData); 
+                                    if(isOnline) await p;
+                                    setView('profile'); 
+                                    showNotify("Cliente actualizado correctamente"); 
+                                } catch (error) {
+                                    showNotify("Error al actualizar cliente");
+                                } finally {
+                                    setIsProcessing(false);
+                                }
+                            }} className="p-6 space-y-5">
+                                
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Nombre Completo</label><input name="name" type="text" defaultValue={selectedClient.name} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500" required /></div>
+                                
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Asignar a Ruta/Sector</label>
+                                    <select name="route" defaultValue={selectedClient.route || 'Todas'} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500 appearance-none cursor-pointer text-indigo-700">
+                                        {userProfile?.role === 'cobrador' && userProfile?.assignedRoute !== 'Todas' 
+                                            ? <option value={userProfile?.assignedRoute}>{userProfile?.assignedRoute}</option>
+                                            : routesList.map((r, i) => <option key={i} value={r}>{r}</option>)}
+                                    </select>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Cédula</label><input name="cedula" type="text" defaultValue={selectedClient.cedula} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500" /></div>
+                                    <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">WhatsApp</label><input name="phone" type="tel" defaultValue={selectedClient.phone} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500" required /></div>
+                                </div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Correo</label><input name="email" type="email" defaultValue={selectedClient.email} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500" /></div>
+                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Dirección Física</label><textarea name="address" rows="3" defaultValue={selectedClient.address} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500"></textarea></div>
+                                
+                                <div className="space-y-1.5 pt-2">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Ubicación GPS</label>
+                                    <div className="flex gap-2">
+                                        <button type="button" onClick={captureLocation} disabled={isProcessing} className={`flex-1 p-4 rounded-2xl font-black text-sm flex items-center justify-center gap-2 active:scale-95 transition-all border ${clientLocation ? 'bg-emerald-50 text-emerald-600 border-emerald-200 shadow-inner' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}>
+                                            <Icon name="map-pin" size={18}/> {clientLocation ? 'GPS Guardado ✓' : 'Actualizar Ubicación'}
+                                        </button>
+                                        {clientLocation && (
+                                            <button type="button" onClick={() => setClientLocation(null)} className="p-4 bg-red-50 text-red-500 rounded-2xl border border-red-100 active:scale-95"><Icon name="trash-2"/></button>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <button type="submit" disabled={isProcessing} className="w-full bg-indigo-600 text-white p-5 rounded-[2.2rem] font-black text-lg shadow-xl shadow-indigo-600/30 active:scale-95 transition-transform mt-4">{isProcessing ? 'Guardando...' : 'Guardar Cambios'}</button>
                             </form>
                         </div>
                     )}
@@ -2611,41 +2741,63 @@
                                             // Calcular métricas en tiempo real para esta ruta
                                             const clientsInRoute = clients.filter(c => c.route === ruta);
                                             const capitalInRoute = clientsInRoute.reduce((sum, c) => sum + (c.totalDebt || 0), 0);
+                                            const isExpanded = expandedRoute === ruta;
                                             
                                             return (
-                                                <div key={idx} className="bg-white p-4 rounded-[1.5rem] border border-slate-100 shadow-sm flex justify-between items-center relative overflow-hidden">
+                                                <div key={idx} className="bg-white p-4 rounded-[1.5rem] border border-slate-100 shadow-sm flex flex-col relative overflow-hidden transition-all">
                                                     <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-indigo-500"></div>
-                                                    <div className="pl-2">
-                                                        <h4 className="font-black text-slate-800 text-lg leading-none mb-1">{ruta}</h4>
-                                                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                                                            {clientsInRoute.length} Clientes • {currency}{Math.round(capitalInRoute).toLocaleString()}
-                                                        </p>
+                                                    
+                                                    <div className="flex justify-between items-center pl-2 cursor-pointer w-full" onClick={() => setExpandedRoute(isExpanded ? null : ruta)}>
+                                                        <div>
+                                                            <h4 className="font-black text-slate-800 text-lg leading-none mb-1">{ruta}</h4>
+                                                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                                                                {clientsInRoute.length} Clientes • {currency}{Math.round(capitalInRoute).toLocaleString()}
+                                                            </p>
+                                                        </div>
+                                                        <div className="flex items-center gap-2">
+                                                            {ruta !== 'General' && (
+                                                                <button 
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        if (clientsInRoute.length > 0) {
+                                                                            showNotify("⚠️ No puedes borrar esta ruta porque tiene clientes activos. Cámbiálos de ruta primero.");
+                                                                            return;
+                                                                        }
+                                                                        setDeleteRouteConfirm(ruta);
+                                                                    }} 
+                                                                    className="w-10 h-10 bg-red-50 text-red-500 rounded-xl flex items-center justify-center hover:bg-red-100 active:scale-95 transition-colors"
+                                                                    title="Eliminar Ruta"
+                                                                >
+                                                                    <Icon name="trash-2" size={16}/>
+                                                                </button>
+                                                            )}
+                                                            <div className={`w-8 h-8 flex items-center justify-center bg-slate-50 text-slate-400 rounded-lg transform transition-transform ${isExpanded ? 'rotate-90' : '-rotate-90'}`}>
+                                                                <Icon name="arrow-left" size={16}/>
+                                                            </div>
+                                                        </div>
                                                     </div>
-                                                    {ruta !== 'General' && (
-                                                        <button 
-                                                            onClick={() => {
-                                                                if (clientsInRoute.length > 0) {
-                                                                    showNotify("⚠️ No puedes borrar esta ruta porque tiene clientes activos. Cámbiálos de ruta primero.");
-                                                                    return;
-                                                                }
-                                                                if (!window.confirm(`¿Seguro que deseas eliminar la ruta "${ruta}"?`)) return;
-                                                                if (!isOnline) return showNotify("Se requiere conexión a Internet");
-                                                                
-                                                                setIsProcessing(true);
-                                                                const updatedRoutes = routesList.filter(r => r !== ruta);
-                                                                handleUpdateSetting('routes', updatedRoutes).then(() => {
-                                                                    showNotify("Ruta eliminada correctamente");
-                                                                    setIsProcessing(false);
-                                                                }).catch(() => {
-                                                                    showNotify("Error al eliminar");
-                                                                    setIsProcessing(false);
-                                                                });
-                                                            }} 
-                                                            className="w-10 h-10 bg-red-50 text-red-500 rounded-xl flex items-center justify-center hover:bg-red-100 active:scale-95 transition-colors"
-                                                            title="Eliminar Ruta"
-                                                        >
-                                                            <Icon name="trash-2" size={16}/>
-                                                        </button>
+
+                                                    {isExpanded && (
+                                                        <div className="mt-4 pt-4 border-t border-slate-100 space-y-2 animate-in pl-2">
+                                                            {clientsInRoute.length > 0 ? (
+                                                                clientsInRoute.map(c => (
+                                                                    <div key={c.id} onClick={() => { setSelectedClientId(c.id); setView('profile'); }} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl hover:bg-indigo-50 hover:border-indigo-100 cursor-pointer transition-colors border border-slate-100 shadow-sm active:scale-[0.98]">
+                                                                        <div className="flex items-center gap-3">
+                                                                            <div className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center font-black text-xs">{c.name[0]}</div>
+                                                                            <div>
+                                                                                <p className="font-bold text-slate-800 text-sm leading-tight">{c.name}</p>
+                                                                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-0.5">{c.phone}</p>
+                                                                            </div>
+                                                                        </div>
+                                                                        <div className="text-right">
+                                                                            <p className={`font-black text-sm ${c.totalDebt > 0 ? 'text-indigo-600' : 'text-emerald-500'}`}>{currency}{Math.round(c.totalDebt || 0).toLocaleString()}</p>
+                                                                        </div>
+                                                                    </div>
+                                                                ))
+                                                            ) : (
+                                                                <p className="text-center text-[10px] font-black uppercase text-slate-400 tracking-widest py-3 bg-slate-50 rounded-xl border border-dashed border-slate-200">Sin clientes asignados</p>
+                                                            )}
+                                                        </div>
                                                     )}
                                                 </div>
                                             );
@@ -2681,7 +2833,7 @@
                                     <div className="bg-white p-5 rounded-[2rem] border border-slate-100 shadow-sm space-y-4">
                                         <div className="space-y-1.5">
                                             <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Nombre del Negocio</label>
-                                            <input type="text" value={userProfile?.companyName || ''} onChange={(e) => handleUpdateSetting('companyName', e.target.value)} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:border-indigo-500" placeholder="Ej: Inversiones Pérez" />
+                                            <input type="text" defaultValue={userProfile?.companyName || ''} onBlur={(e) => handleUpdateSetting('companyName', e.target.value)} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:border-indigo-500" placeholder="Ej: Inversiones Pérez" />
                                         </div>
 
                                         <div className="space-y-1.5">
@@ -2711,21 +2863,21 @@
                                         <div className="grid grid-cols-2 gap-3">
                                             <div className="space-y-1.5">
                                                 <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Interés Defecto (%)</label>
-                                                <input type="number" value={userProfile?.defaultInterest || ''} onChange={(e) => handleUpdateSetting('defaultInterest', e.target.value)} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:border-indigo-500" placeholder="Ej: 20" />
+                                                <input type="number" defaultValue={userProfile?.defaultInterest || ''} onBlur={(e) => handleUpdateSetting('defaultInterest', e.target.value)} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:border-indigo-500" placeholder="Ej: 20" />
                                             </div>
                                             <div className="space-y-1.5">
                                                 <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Mora Defecto (%)</label>
-                                                <input type="number" value={userProfile?.defaultMoraPercentage || ''} onChange={(e) => handleUpdateSetting('defaultMoraPercentage', e.target.value)} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:border-indigo-500" placeholder="Ej: 5" />
+                                                <input type="number" defaultValue={userProfile?.defaultMoraPercentage || ''} onBlur={(e) => handleUpdateSetting('defaultMoraPercentage', e.target.value)} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:border-indigo-500" placeholder="Ej: 5" />
                                             </div>
                                         </div>
 
                                         <div className="space-y-1.5">
                                             <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Moneda</label>
-                                            <input type="text" value={userProfile?.currency || ''} onChange={(e) => handleUpdateSetting('currency', e.target.value)} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:border-indigo-500" placeholder="Ej: RD$, $, €" />
+                                            <input type="text" defaultValue={userProfile?.currency || ''} onBlur={(e) => handleUpdateSetting('currency', e.target.value)} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:border-indigo-500" placeholder="Ej: RD$, $, €" />
                                         </div>
                                         <div className="space-y-1.5">
                                             <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Pie de página en recibos</label>
-                                            <input type="text" value={userProfile?.receiptFooter || ''} onChange={(e) => handleUpdateSetting('receiptFooter', e.target.value)} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:border-indigo-500" placeholder="Ej: ¡Gracias por su pago!" />
+                                            <input type="text" defaultValue={userProfile?.receiptFooter || ''} onBlur={(e) => handleUpdateSetting('receiptFooter', e.target.value)} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:border-indigo-500" placeholder="Ej: ¡Gracias por su pago!" />
                                         </div>
                                         
                                         <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
