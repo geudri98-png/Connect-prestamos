@@ -515,7 +515,10 @@
                             canvas.height = height;
                             const ctx = canvas.getContext('2d');
                             ctx.drawImage(img, 0, 0, width, height);
-                            resolve(canvas.toDataURL('image/jpeg', 0.6)); 
+                            
+                            // Si el archivo es PNG, usar image/png para conservar transparencia. Si no, usar JPEG.
+                            const isPng = file.type === 'image/png';
+                            resolve(canvas.toDataURL(isPng ? 'image/png' : 'image/jpeg', isPng ? undefined : 0.6)); 
                         };
                         img.src = e.target.result;
                     };
