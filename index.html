@@ -638,53 +638,9 @@
                                     showNotify("Tu acceso ha sido revocado por el administrador.");
                                     return;
                                 }
-                          // --- INICIO SEGURIDAD SAAS ---
-const verifySaaS = async () => {
-    let adminData = profile;
-    
-    // Si es cobrador, verificamos la cuenta de su administrador (Cascada)
-    if (profile.role === 'cobrador' && profile.adminUid) {
-        try {
-            const adminSnap = await db.collection('users').doc(profile.adminUid).get();
-            if (adminSnap.exists) {
-                adminData = adminSnap.data();
-            } else {
-                auth.signOut();
-                showNotify("Cuenta matriz no encontrada.");
-                return;
-            }
-        } catch (e) { console.error(e); }
-    }
-
-    // Bloqueo por Suspensión Manual
-    if (adminData.planStatus === 'suspended') {
-        auth.signOut();
-        showNotify("Cuenta suspendida. Contacte a soporte.");
-        return;
-    }
-
-    // Bloqueo por Vencimiento de Fecha
-    if (adminData.subscriptionEndDate) {
-        const end = new Date(adminData.subscriptionEndDate);
-        const hoy = new Date();
-        hoy.setHours(0,0,0,0);
-        if (end < hoy) {
-            auth.signOut();
-            showNotify("Licencia vencida. Favor renovar su plan.");
-            return;
-        }
-    }
-
-    // Inyectar límites para usarlos en el resto de la app
-    profile.maxRoutes = adminData.maxRoutes || 2;
-    profile.maxCobradores = adminData.maxCobradores || 3;
-
-    setUserProfile(profile);
-    setAdminUid(profile.role === 'cobrador' ? profile.adminUid : usr.uid);
-    setView('dashboard');
-};
-verifySaaS();
-// --- FIN SEGURIDAD SAAS ---
+                                setUserProfile(profile);
+                                setAdminUid(profile.role === 'cobrador' ? profile.adminUid : usr.uid);
+                                setView('dashboard');
                             } else {
                                 setUserProfile({ role: 'admin' });
                                 setAdminUid(usr.uid);
@@ -760,11 +716,7 @@ verifySaaS();
                     setCobradores([]);
                 }
             }, [user?.uid, userProfile?.role]);
-// --- VALIDACIÓN DE LÍMITE DE COBRADORES (SAAS) ---
-if (cobradores.length >= (userProfile?.maxCobradores || 3)) {
-    showNotify(`Límite alcanzado (${userProfile?.maxCobradores} cobradores). Contacta a soporte para mejorar tu plan.`);
-    return;
-}
+
             const handleCreateCobrador = async (e) => {
                 e.preventDefault();
                 if (!isOnline) {
@@ -2754,14 +2706,11 @@ if (cobradores.length >= (userProfile?.maxCobradores || 3)) {
                                         if (!newRouteInput.trim()) return;
                                         if (!isOnline) return showNotify("Se requiere conexión a Internet");
                                         
-                                       const currentRoutes = userProfile?.routes || ['General'];
-
-if (currentRoutes.length >= (userProfile?.maxRoutes || 2)) {
-    showNotify(`Límite alcanzado (${userProfile?.maxRoutes || 2} rutas). Contacta a soporte.`);
-    return;
-}
-
-if (currentRoutes.includes(newRouteInput.trim())) { ... }
+                                        const currentRoutes = userProfile?.routes || ['General'];
+                                        if (currentRoutes.includes(newRouteInput.trim())) {
+                                            showNotify("Esa ruta ya existe");
+                                            return;
+                                        }
                                         
                                         setIsProcessing(true);
                                         const updatedRoutes = [...currentRoutes, newRouteInput.trim()];
