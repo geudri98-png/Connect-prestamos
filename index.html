@@ -166,7 +166,12 @@
         const auth = firebase.auth();
         const db = firebase.firestore();
 
-        db.enablePersistence({ synchronizeTabs: true }).catch(() => console.warn("Persistencia offline no disponible"));
+        db.enablePersistence({ synchronizeTabs: true }).catch((err) => {
+            console.error("Persistencia offline error:", err);
+            if (err.code !== 'failed-precondition') {
+                console.warn("Persistencia offline no disponible");
+            }
+        });
 
         const LOGO_URL = "https://raw.githubusercontent.com/geudri98-png/Connect-prestamos/23ac554dea034e3dc9675fe2abffa052d83ad021/connectprestamos%20logopng%20(1).png";
 
@@ -533,14 +538,25 @@
                 return clients;
             }, [clients, userProfile]);
 
+            // DEUDA_THRESHOLD constant to prevent floating point errors
+            const DEUDA_THRESHOLD = 0.1;
+            
             const loanPreview = useMemo(() => {
                 const amount = parseFloat(loanForm.amount) || 0;
                 const interest = parseFloat(loanForm.interest) || 0;
                 const inst = parseInt(loanForm.installments) || 1;
                 
                 if (loanForm.type === 'Rédito') {
+                    // Rédito: Monthly interest only, no amortization
                     return { totalToPay: amount, installmentAmount: amount * (interest / 100), totalInterest: amount * (interest / 100) };
+                } else if (loanForm.type === 'TIPO SAM') {
+                    // TIPO SAM: Fixed interest per installment, not compounded
+                    const interestPerInstallment = amount * (interest / 100);
+                    const totalInterest = interestPerInstallment * inst;
+                    const totalToPay = amount + totalInterest;
+                    return { totalToPay: totalToPay, installmentAmount: totalToPay / inst, totalInterest: totalInterest };
                 } else {
+                    // Amortizado: Standard amortization
                     const totalInterest = loanForm.interestType === 'Por Cuota' ? (amount * (interest / 100) * inst) : (amount * (interest / 100));
                     const totalToPay = amount + totalInterest;
                     return { totalToPay, installmentAmount: totalToPay / inst, totalInterest };
@@ -619,37 +635,54 @@
 
             useEffect(() => {
                 let unsubProfile = null;
-                const unsubscribe = auth.onAuthStateChanged(usr => {
+                const unsubscribe = auth.onAuthStateChanged(async usr => {
                     setUser(usr);
-                    if (unsubProfile) { unsubProfile(); unsubProfile = null; } 
+                    // Clean up old listener to prevent memory leaks
+                    if (unsubProfile) { 
+                        unsubProfile(); 
+                        unsubProfile = null; 
+                    } 
                     
                     if (usr) {
-                        unsubProfile = db.collection('users').doc(usr.uid).onSnapshot(doc => {
-                            if (doc.exists) {
-                                const profile = doc.data();
-                                
-                                if (!profile.role) {
-                                    profile.role = 'admin';
-                                    db.collection('users').doc(usr.uid).set({ role: 'admin' }, { merge: true }).catch(err => console.error(err));
-                                }
+                        try {
+                            unsubProfile = db.collection('users').doc(usr.uid).onSnapshot(doc => {
+                                try {
+                                    if (doc.exists) {
+                                        const profile = doc.data();
+                                        
+                                        if (!profile.role) {
+                                            profile.role = 'admin';
+                                            db.collection('users').doc(usr.uid).set({ role: 'admin' }, { merge: true }).catch(err => console.error("Error setting default role:", err));
+                                        }
 
-                                if (profile.status === 'deleted' || profile.role === 'disabled') {
-                                    auth.signOut();
-                                    showNotify("Tu acceso ha sido revocado por el administrador.");
-                                    return;
+                                        if (profile.status === 'deleted' || profile.role === 'disabled') {
+                                            auth.signOut();
+                                            showNotify("Tu acceso ha sido revocado por el administrador.");
+                                            return;
+                                        }
+                                        setUserProfile(profile);
+                                        setAdminUid(profile.role === 'cobrador' ? profile.adminUid : usr.uid);
+                                        setView('dashboard');
+                                    } else {
+                                        setUserProfile({ role: 'admin' });
+                                        setAdminUid(usr.uid);
+                                        setView('dashboard');
+                                    }
+                                } catch (err) {
+                                    console.error("Error processing profile snapshot:", err);
+                                    showNotify("Error al cargar perfil. Recargando...");
                                 }
-                                setUserProfile(profile);
-                                setAdminUid(profile.role === 'cobrador' ? profile.adminUid : usr.uid);
-                                setView('dashboard');
-                            } else {
-                                setUserProfile({ role: 'admin' });
-                                setAdminUid(usr.uid);
-                                setView('dashboard');
-                            }
-                        }, error => {
-                            console.error("Firestore Permission Error (Profile):", error);
-                            showNotify("Acceso Denegado por Firebase. Verifica que tus Reglas de Seguridad (Rules) no hayan expirado.");
-                        });
+                            }, error => {
+                                console.error("Firestore Permission Error (Profile):", error);
+                                if (error.code === 'permission-denied') {
+                                    showNotify("Acceso Denegado por Firebase. Verifica tus Reglas de Seguridad.");
+                                } else {
+                                    showNotify("Error al conectar con Firebase. Verifica tu conexión.");
+                                }
+                            });
+                        } catch (err) {
+                            console.error("Error setting up profile listener:", err);
+                        }
                     } else {
                         setView('login');
                         setUserProfile(null);
@@ -670,35 +703,57 @@
 
             useEffect(() => {
                 if (adminUid) {
-                    const unsubClients = db.collection('users').doc(adminUid).collection('clients').onSnapshot(snap => {
-                        setClients(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-                    }, error => {
-                        console.error("Firestore Permission Error (Clients):", error);
-                        showNotify("Permisos insuficientes para leer clientes. Revisa la consola de Firebase.");
-                    });
-                    
-                    const unsubGains = db.collection('users').doc(adminUid).collection('gains').onSnapshot(snap => {
-                        const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                        data.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
-                        setStoredGains(data);
-                    }, error => {
-                        console.error("Firestore Permission Error (Gains):", error);
-                        showNotify("Permisos insuficientes para leer ganancias. Revisa la consola de Firebase.");
-                    });
-                    
-                    const unsubCortes = db.collection('users').doc(adminUid).collection('cortes').onSnapshot(snap => {
-                        const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                        data.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
-                        setCortesHistory(data);
-                    }, error => {
-                        console.error("Firestore Permission Error (Cortes):", error);
-                    });
+                    try {
+                        const unsubClients = db.collection('users').doc(adminUid).collection('clients').onSnapshot(snap => {
+                            try {
+                                setClients(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+                            } catch (err) {
+                                console.error("Error processing clients snapshot:", err);
+                            }
+                        }, error => {
+                            console.error("Firestore Error (Clients):", error);
+                            if (error.code === 'permission-denied') {
+                                showNotify("Permisos insuficientes para leer clientes.");
+                            }
+                        });
+                        
+                        const unsubGains = db.collection('users').doc(adminUid).collection('gains').onSnapshot(snap => {
+                            try {
+                                const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                                data.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+                                setStoredGains(data);
+                            } catch (err) {
+                                console.error("Error processing gains snapshot:", err);
+                            }
+                        }, error => {
+                            console.error("Firestore Error (Gains):", error);
+                            if (error.code === 'permission-denied') {
+                                showNotify("Permisos insuficientes para leer ganancias.");
+                            }
+                        });
+                        
+                        const unsubCortes = db.collection('users').doc(adminUid).collection('cortes').onSnapshot(snap => {
+                            try {
+                                const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                                data.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+                                setCortesHistory(data);
+                            } catch (err) {
+                                console.error("Error processing cortes snapshot:", err);
+                            }
+                        }, error => {
+                            console.error("Firestore Error (Cortes):", error);
+                        });
 
-                    return () => { unsubClients(); unsubGains(); unsubCortes(); };
+                        return () => { unsubClients(); unsubGains(); unsubCortes(); };
+                    } catch (err) {
+                        console.error("Error setting up listeners:", err);
+                        return () => {};
+                    }
                 } else {
                     setClients([]);
                     setStoredGains([]);
                     setCortesHistory([]);
+                    return () => {};
                 }
             }, [adminUid]);
 
@@ -785,23 +840,38 @@
                 if(isProcessing || !adminUid) return;
                 setIsProcessing(true);
                 const client = clients.find(c => c.id === clientId);
+                
+                if (!client) {
+                    showNotify("Cliente no encontrado");
+                    setIsProcessing(false);
+                    return;
+                }
+                
+                if (!client.loan) {
+                    showNotify("Este cliente no tiene un préstamo activo");
+                    setIsProcessing(false);
+                    return;
+                }
+
                 let amountStr = String(inputAmount).replace(/,/g, '');
                 let amount = parseFloat(amountStr) || 0;
                 
-                if (amount <= 0) { setIsProcessing(false); return showNotify("Monto inválido"); }
+                if (amount <= 0) { 
+                    setIsProcessing(false); 
+                    return showNotify("Monto inválido"); 
+                }
 
                 try {
-                    let newHistory = client.history || [];
-                    const isRedito = client.loan.type === 'Rédito';
-                    const instBaseAmount = client.loan.installmentAmount;
+                    let newHistory = Array.isArray(client.history) ? [...client.history] : [];
+                    const loanType = client.loan.type;
+                    const instBaseAmount = client.loan.installmentAmount || 0;
                     const partialCredit = client.loan.partialCredit || 0;
                     const paidMora = client.loan.mora || 0;
                     
                     let totalMoneyAvailable = amount + partialCredit;
                     
-                    if (paidMora > 0) {
-                        if (totalMoneyAvailable >= paidMora) totalMoneyAvailable -= paidMora;
-                        else totalMoneyAvailable = 0;
+                    if (paidMora > 0 && totalMoneyAvailable > 0) {
+                        totalMoneyAvailable = Math.max(0, totalMoneyAvailable - paidMora);
                     }
 
                     let installmentsCovered = 0;
@@ -814,82 +884,141 @@
                     if (nextDate.includes('NaN')) nextDate = formatDate(new Date());
                     let description = '';
 
-                    if (isRedito) {
+                    // CORRECTED LOGIC: Separate handling for each loan type
+                    if (loanType === 'Rédito') {
                         if (transactionType === 'Capital') {
+                            // Pure capital payment
                             newDebt = Math.max(0, client.totalDebt - totalMoneyAvailable);
-                            surplus = 0; description = 'Abono a Capital';
+                            surplus = 0; 
+                            description = 'Abono a Capital';
                         } else {
+                            // Interest/installment payment
                             installmentsCovered = Math.floor(totalMoneyAvailable / instBaseAmount);
                             surplus = totalMoneyAvailable % instBaseAmount;
                             newPaid = currentPaid + installmentsCovered;
-                            if (installmentsCovered > 0) { for(let i=0; i < installmentsCovered; i++) { nextDate = calculateNextDate(nextDate, client.loan.frequency); } }
+                            if (installmentsCovered > 0) { 
+                                for(let i=0; i < installmentsCovered; i++) { 
+                                    nextDate = calculateNextDate(nextDate, client.loan.frequency); 
+                                } 
+                            }
                             description = installmentsCovered > 0 ? `Pago Interés (${installmentsCovered} cuotas)` : (paidMora > 0 ? 'Pago de Mora' : 'Abono parcial a interés');
                         }
-                    } else {
+                    } else if (loanType === 'TIPO SAM') {
+                        // TIPO SAM: Direct debt reduction
+                        newDebt = Math.max(0, client.totalDebt - amount);
+                        installmentsCovered = 1; // Count as one installment covered
+                        description = 'Abono de Cuota (SAM)';
+                        if (amount < instBaseAmount) {
+                            surplus = amount;
+                        } else {
+                            newPaid = Math.min(client.loan.totalInstallments || 1, currentPaid + Math.floor(amount / instBaseAmount));
+                            nextDate = calculateNextDate(nextDate, client.loan.frequency);
+                        }
+                    } else if (loanType === 'Amortizado') {
                         if (transactionType === 'Capital') {
                             newDebt = Math.max(0, client.totalDebt - totalMoneyAvailable);
-                            surplus = 0; description = 'Abono a Capital (Reducción de Deuda)';
+                            surplus = 0; 
+                            description = 'Abono a Capital (Reducción de Deuda)';
                         } else {
                             installmentsCovered = Math.floor(totalMoneyAvailable / instBaseAmount);
                             surplus = totalMoneyAvailable % instBaseAmount;
-                            newPaid = Math.min(client.loan.totalInstallments, currentPaid + installmentsCovered);
+                            newPaid = Math.min(client.loan.totalInstallments || 1, currentPaid + installmentsCovered);
                             let totalMoneyToDiscount = installmentsCovered * instBaseAmount;
                             newDebt = Math.max(0, client.totalDebt - totalMoneyToDiscount);
                             
-                            if (installmentsCovered > 0) { for(let i=0; i < installmentsCovered; i++) { nextDate = calculateNextDate(nextDate, client.loan.frequency); } }
+                            if (installmentsCovered > 0) { 
+                                for(let i=0; i < installmentsCovered; i++) { 
+                                    nextDate = calculateNextDate(nextDate, client.loan.frequency); 
+                                } 
+                            }
                             description = installmentsCovered > 0 ? `Pago Cuota ${newPaid}/${client.loan.totalInstallments}` : (paidMora > 0 ? 'Pago de Mora' : 'Abono parcial');
                         }
                     }
 
                     let newInstallmentAmount = instBaseAmount;
+                    let gainAmount = 0;
+                    
+                    // Calculate gain based on loan type
+                    if (loanType === 'Rédito' || loanType === 'TIPO SAM') {
+                        gainAmount = transactionType === 'Interés' || loanType === 'TIPO SAM' ? amount : 0;
+                    } else {
+                        // Amortizado
+                        gainAmount = installmentsCovered > 0 ? (installmentsCovered * instBaseAmount * (client.loan.interest / (100 + client.loan.interest))) : 0;
+                    }
+                    
                     let gainRecord = {
-                        clientId: client.id, clientName: client.name,
+                        clientId: client.id, 
+                        clientName: client.name,
                         date: dateOverride ? parseDateString(dateOverride).toLocaleDateString('es-DO') : formatDate(new Date()),
                         totalValue: amount,
-                        gainAmount: isRedito ? (transactionType === 'Interés' ? amount : 0) : (installmentsCovered * instBaseAmount * (client.loan.interest / (100 + client.loan.interest))),
-                        status: 'Activo', type: transactionType, timestamp: new Date().toISOString()
+                        gainAmount: gainAmount,
+                        status: 'Activo', 
+                        type: transactionType, 
+                        timestamp: new Date().toISOString()
                     };
 
                     const transaction = {
-                        id: Date.now().toString(), amount: amount, surplus: surplus,
+                        id: Date.now().toString(), 
+                        amount: amount, 
+                        surplus: surplus,
                         date: dateOverride ? parseDateString(dateOverride).toLocaleDateString('es-DO') : new Date().toLocaleString('es-DO'),
-                        type: transactionType, description: description,
+                        type: transactionType, 
+                        description: description,
                         ref: Math.floor(1000 + Math.random() * 8999).toString(),
                         installmentStatus: installmentsCovered > 0 ? 'Pagada' : 'Abono',
-                        remainingInstallments: isRedito ? '∞' : client.loan.totalInstallments - newPaid,
-                        paidMora: paidMora, remainingDebt: newDebt
+                        remainingInstallments: (loanType === 'Rédito') ? '∞' : (client.loan.totalInstallments || 1) - newPaid,
+                        paidMora: paidMora, 
+                        remainingDebt: newDebt
                     };
 
-                    const promises = [];
-
+                    // Update database
                     if (amount > 0) {
                         newHistory.unshift(transaction);
-                        promises.push(db.collection('users').doc(adminUid).collection('gains').add(gainRecord));
                     }
 
-                    if (newDebt <= 0.1) {
-                        promises.push(db.collection('users').doc(adminUid).collection('clients').doc(clientId).update({ totalDebt: 0, loan: null, history: newHistory }));
+                    let updateData = {};
+                    if (newDebt <= DEUDA_THRESHOLD) {
+                        updateData = { totalDebt: 0, loan: null, history: newHistory };
                     } else {
-                        promises.push(db.collection('users').doc(adminUid).collection('clients').doc(clientId).update({
-                            totalDebt: newDebt, 'loan.paidInstallments': newPaid, 'loan.nextPaymentDate': nextDate,
-                            'loan.partialCredit': surplus, 'loan.installmentAmount': newInstallmentAmount, 'loan.mora': 0, history: newHistory
-                        }));
+                        updateData = {
+                            totalDebt: newDebt, 
+                            'loan.paidInstallments': newPaid, 
+                            'loan.nextPaymentDate': nextDate,
+                            'loan.partialCredit': surplus, 
+                            'loan.installmentAmount': newInstallmentAmount, 
+                            'loan.mora': 0, 
+                            history: newHistory
+                        };
+                    }
+
+                    const clientUpdatePromise = db.collection('users').doc(adminUid).collection('clients').doc(clientId).update(updateData);
+                    
+                    let gainsPromise = Promise.resolve();
+                    if (amount > 0) {
+                        gainsPromise = db.collection('users').doc(adminUid).collection('gains').add(gainRecord);
                     }
 
                     if (isOnline) {
-                        await Promise.all(promises);
+                        await Promise.all([clientUpdatePromise, gainsPromise]);
                     } else {
-                        promises.forEach(p => p.catch(e => console.log("Encolado para sincronización")));
+                        clientUpdatePromise.catch(e => console.log("Transaction queued for sync:", e));
+                        gainsPromise.catch(e => console.log("Gains queued for sync:", e));
                     }
 
-                    if (newDebt <= 0.1) showNotify("¡Préstamo Saldado!");
-                    else showNotify("Transacción Registrada");
+                    if (newDebt <= DEUDA_THRESHOLD) {
+                        showNotify("¡Préstamo Saldado!");
+                    } else {
+                        showNotify("Transacción Registrada");
+                    }
 
                     setIsTransacting(false);
                     if(amount > 0) setReceiptData({ client, transaction });
                 } catch (error) { 
-                    showNotify("Error al procesar el pago. Verifica permisos de tu DB."); 
-                } finally { setIsProcessing(false); }
+                    console.error("Transaction error:", error);
+                    showNotify("Error al procesar el pago. " + error.message); 
+                } finally { 
+                    setIsProcessing(false); 
+                }
             };
 
             const handleDeleteClient = async (id) => {
@@ -899,16 +1028,48 @@
             };
 
             const handleDeletePayment = async (paymentId) => {
+                if (!selectedClient || !selectedClient.history) {
+                    showNotify("Error: Cliente o historial no disponible");
+                    return;
+                }
+                
                 try {
+                    const paymentToDelete = selectedClient.history.find(h => h.id === paymentId);
+                    if (!paymentToDelete) {
+                        showNotify("Pago no encontrado");
+                        return;
+                    }
+                    
                     const newHistory = selectedClient.history.filter(h => h.id !== paymentId);
                     const p1 = db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({ history: newHistory });
-                    const p2 = db.collection('users').doc(adminUid).collection('gains').where('clientId', '==', selectedClientId).where('date', '==', selectedClient.history.find(h => h.id === paymentId).date).get().then(snap => { snap.forEach(doc => doc.ref.delete()); });
                     
-                    if(isOnline) await Promise.all([p1, p2]);
-                    else { p1.catch(e=>e); p2.catch(e=>e); showNotify("Pago anulado (Se sincronizará luego)"); }
+                    let p2 = Promise.resolve();
+                    if (paymentToDelete.date) {
+                        p2 = db.collection('users').doc(adminUid).collection('gains')
+                            .where('clientId', '==', selectedClientId)
+                            .where('date', '==', paymentToDelete.date)
+                            .get()
+                            .then(snap => { 
+                                const batch = db.batch();
+                                snap.forEach(doc => batch.delete(doc.ref));
+                                return batch.commit();
+                            });
+                    }
                     
-                    setDeletePaymentConfirm(null); showNotify("Pago anulado");
-                } catch (e) { showNotify("Error al anular pago"); }
+                    if(isOnline) {
+                        await Promise.all([p1, p2]);
+                    } else { 
+                        p1.catch(e => console.error("Delete payment queued:", e));
+                        p2.catch(e => console.error("Delete gains queued:", e));
+                        showNotify("Pago anulado (Se sincronizará luego)"); 
+                    }
+                    
+                    setDeletePaymentConfirm(null); 
+                    showNotify("Pago anulado");
+                } catch (e) { 
+                    console.error("Delete payment error:", e);
+                    showNotify("Error al anular pago"); 
+                }
             };
 
             const handleClearHistory = async () => {
@@ -924,7 +1085,6 @@
             const handleResetGains = async () => {
                 setIsProcessing(true);
                 try {
-                    const batch = db.batch();
                     let gainsToArchive = [];
                     let totalGainsInCut = 0;
                     let totalCollectedInCut = 0;
@@ -942,6 +1102,10 @@
                         return;
                     }
 
+                    // Create batch for all updates
+                    const batch = db.batch();
+                    
+                    // Update client histories
                     clients.forEach(c => {
                         let updated = false;
                         const newHistory = (c.history || []).map(h => {
@@ -957,13 +1121,19 @@
                         }
                     });
 
+                    // Delete archived gains
                     gainsToArchive.forEach(g => { 
-                        batch.delete(db.collection('users').doc(adminUid).collection('gains').doc(g.id)); 
+                        try {
+                            batch.delete(db.collection('users').doc(adminUid).collection('gains').doc(g.id));
+                        } catch (err) {
+                            console.error("Error adding delete to batch:", err);
+                        }
                     });
                     
                     const riskCapitalSnapshot = overdueClients.reduce((sum, c) => sum + (c.totalDebt || 0), 0);
                     const capitalRecovered = totalCollectedInCut - totalGainsInCut;
 
+                    // Create new corte record
                     const newCorteRef = db.collection('users').doc(adminUid).collection('cortes').doc();
                     batch.set(newCorteRef, {
                         timestamp: new Date().toISOString(),
@@ -976,19 +1146,35 @@
                         pendingProfitSnapshot: pendingProfit,
                         riskCapitalSnapshot: riskCapitalSnapshot,
                         totalClients: clients.length,
-                        activeLoans: displayedClients.filter(c => c.loan && c.totalDebt > 0.1).length,
+                        activeLoans: displayedClients.filter(c => c.loan && c.totalDebt > DEUDA_THRESHOLD).length,
                         overdueClients: overdueClients.length,
                         collectionCount: gainsToArchive.length
                     });
 
+                    // Commit batch
                     await batch.commit();
-                    const p = db.collection('users').doc(adminUid).set({ historicalGains: firebase.firestore.FieldValue.increment(totalGainsInCut) }, { merge: true });
-                    if(isOnline) await p;
+                    
+                    // Update historical gains
+                    const histGainsPromise = db.collection('users').doc(adminUid).set(
+                        { historicalGains: firebase.firestore.FieldValue.increment(totalGainsInCut) }, 
+                        { merge: true }
+                    );
+                    
+                    if(isOnline) {
+                        await histGainsPromise;
+                    } else {
+                        histGainsPromise.catch(e => console.error("Historical gains update queued:", e));
+                    }
                     
                     setResetGainsConfirm(false); 
                     setCorteStartDate('');
                     showNotify("Corte realizado y archivado exitosamente.");
-                } catch (e) { showNotify("Error al hacer corte"); } finally { setIsProcessing(false); }
+                } catch (e) { 
+                    console.error("Error al hacer corte:", e);
+                    showNotify("Error al hacer corte: " + e.message); 
+                } finally { 
+                    setIsProcessing(false); 
+                }
             };
 
             const exportBackup = () => {
@@ -2376,7 +2562,9 @@
                                 <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Monto del Préstamo ({currency})</label><input type="number" value={loanForm.amount} onChange={e => setLoanForm({...loanForm, amount: e.target.value})} className="w-full p-5 bg-slate-50 border border-slate-200 rounded-[1.5rem] font-black text-xl text-center outline-none focus:border-indigo-500 text-indigo-600" required /></div>
                                 
                                 <div className="grid grid-cols-2 gap-4">
-                                    <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Modalidad</label><select value={loanForm.type} onChange={e => setLoanForm({...loanForm, type: e.target.value, installments: e.target.value === 'Rédito' ? '1' : loanForm.installments})} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500 appearance-none text-center cursor-pointer"><option value="Amortizado">Amortizado</option><option value="Rédito">Solo Rédito</option></select></div>
+                                    <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Modalidad</label><select value={loanForm.type} onChange={e => setLoanForm({...loanForm, type: e.target.value, installments: (e.target.value === 'Rédito' || e.target.value === 'TIPO SAM') ? '1' : loanForm.installments})} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500 appearance-none text-center cursor-pointer"><option value="Amortizado">Amortizado</option><option value="Rédito">Solo Rédito</option>
+<option value="TIPO SAM" className="font-bold text-indigo-600">TIPO SAM</option>
+</select></div>
                                     <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">% Interés</label><input type="number" step="0.1" value={loanForm.interest} onChange={e => setLoanForm({...loanForm, interest: e.target.value})} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold text-center outline-none focus:border-indigo-500" required /></div>
                                 </div>
 
