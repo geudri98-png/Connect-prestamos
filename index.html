@@ -229,6 +229,23 @@
             return <span className={`icon-container inline-flex items-center justify-center ${className}`}>{icons[name] || null}</span>;
         };
 
+            const LockedView = ({ contactNumber = 'TUNUMERO' }) => {
+                return (
+                    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
+                        <div className="bg-white p-8 rounded-2xl shadow-xl text-center max-w-md">
+                            <div className="mb-4">
+                                <Icon name="lock" size={44} className="text-red-500" />
+                            </div>
+                            <h2 className="heading-font text-2xl font-black text-slate-800 mb-2">Licencia vencida o cuenta suspendida.</h2>
+                            <p className="text-sm text-slate-500 mb-6">Comuníquese con soporte para restaurar el acceso.</p>
+                            <div className="flex gap-3 justify-center">
+                                <button onClick={() => window.open(`https://wa.me/${8496518193}`, '_blank')} className="px-6 py-3 bg-emerald-500 text-white rounded-2xl font-black">Contactar por WhatsApp</button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
         const App = () => {
             const [user, setUser] = useState(null);
             const [adminUid, setAdminUid] = useState(null);
@@ -247,6 +264,8 @@
 
             const [userProfile, setUserProfile] = useState(null);
             const [showSplash, setShowSplash] = useState(true);
+            const [isLocked, setIsLocked] = useState(false);
+            const [daysRemaining, setDaysRemaining] = useState(null);
 
             const [storedGains, setStoredGains] = useState([]);
             const [earningsFilter, setEarningsFilter] = useState('todas');
@@ -635,21 +654,32 @@
 
             useEffect(() => {
                 let unsubProfile = null;
+                let unsubIdToken = null;
                 const unsubscribe = auth.onAuthStateChanged(async usr => {
                     setUser(usr);
-                    // Clean up old listener to prevent memory leaks
-                    if (unsubProfile) { 
-                        unsubProfile(); 
-                        unsubProfile = null; 
-                    } 
-                    
+                    // Clean up old listeners to prevent memory leaks
+                    if (unsubProfile) {
+                        unsubProfile();
+                        unsubProfile = null;
+                    }
+                    if (unsubIdToken) {
+                        unsubIdToken();
+                        unsubIdToken = null;
+                    }
+
                     if (usr) {
+                        unsubIdToken = auth.onIdTokenChanged(currentUser => {
+                            if (currentUser && currentUser.uid === usr.uid) {
+                                currentUser.getIdToken(true).catch(err => console.error('Error refreshing auth token:', err));
+                            }
+                        });
+
                         try {
                             unsubProfile = db.collection('users').doc(usr.uid).onSnapshot(doc => {
                                 try {
                                     if (doc.exists) {
                                         const profile = doc.data();
-                                        
+
                                         if (!profile.role) {
                                             profile.role = 'admin';
                                             db.collection('users').doc(usr.uid).set({ role: 'admin' }, { merge: true }).catch(err => console.error("Error setting default role:", err));
@@ -660,6 +690,45 @@
                                             showNotify("Tu acceso ha sido revocado por el administrador.");
                                             return;
                                         }
+
+                                        // Reactive license & security checks
+                                        try {
+                                            const status = profile.status;
+                                            const subEnd = profile.subscriptionEndDate;
+                                            let locked = false;
+                                            let endDate = null;
+
+                                            if (subEnd) {
+                                                endDate = typeof subEnd.toDate === 'function' ? subEnd.toDate() : new Date(subEnd);
+                                            }
+
+                                            if (status === 'blocked') {
+                                                locked = true;
+                                                if (auth.currentUser) {
+                                                    auth.currentUser.reload().catch(err => console.error('Error reloading auth user:', err));
+                                                }
+                                            } else if (endDate && !isNaN(endDate.getTime())) {
+                                                const now = new Date();
+                                                if (now > endDate) {
+                                                    locked = true;
+                                                } else {
+                                                    const days = Math.ceil((endDate - now) / (1000 * 60 * 60 * 24));
+                                                    setDaysRemaining(days);
+                                                }
+                                            } else {
+                                                setDaysRemaining(null);
+                                            }
+
+                                            if (locked) {
+                                                setDaysRemaining(null);
+                                            }
+                                            setIsLocked(locked);
+                                        } catch (e) {
+                                            console.error('License check error:', e);
+                                            setIsLocked(false);
+                                            setDaysRemaining(null);
+                                        }
+
                                         setUserProfile(profile);
                                         setAdminUid(profile.role === 'cobrador' ? profile.adminUid : usr.uid);
                                         setView('dashboard');
@@ -667,6 +736,8 @@
                                         setUserProfile({ role: 'admin' });
                                         setAdminUid(usr.uid);
                                         setView('dashboard');
+                                        setIsLocked(false);
+                                        setDaysRemaining(null);
                                     }
                                 } catch (err) {
                                     console.error("Error processing profile snapshot:", err);
@@ -693,11 +764,14 @@
                         setSelectedClientId(null);
                         setReceiptData(null);
                         setReminderClient(null);
+                        setIsLocked(false);
+                        setDaysRemaining(null);
                     }
                 });
                 return () => {
                     unsubscribe();
                     if (unsubProfile) unsubProfile();
+                    if (unsubIdToken) unsubIdToken();
                 };
             }, []);
 
@@ -776,6 +850,11 @@
                 e.preventDefault();
                 if (!isOnline) {
                     showNotify("Crear usuarios requiere conexión a Internet.");
+                    return;
+                }
+                // Respect maxCobradores limit from profile
+                if (userProfile?.maxCobradores !== undefined && cobradores && cobradores.length >= userProfile.maxCobradores) {
+                    showNotify(`Límite de cobradores alcanzado (${userProfile.maxCobradores}).`);
                     return;
                 }
                 setIsProcessing(true);
@@ -1412,6 +1491,10 @@
                 );
             }
 
+            if (isLocked) {
+                return <LockedView contactNumber={userProfile?.supportNumber || 'TUNUMERO'} />;
+            }
+
             const selectedClient = clients.find(c => c.id === selectedClientId);
             const isRestrictedRole = userProfile?.role === 'empleado' || userProfile?.role === 'cobrador';
 
@@ -1857,6 +1940,9 @@
                                         {isRestrictedRole && <span className="bg-amber-100 text-amber-700 text-[9px] px-2 py-0.5 rounded-full font-black uppercase tracking-widest inline-block -mt-6 relative z-10 shadow-sm border border-amber-200">
                                             {userProfile?.role === 'cobrador' ? `Ruta: ${userProfile.assignedRoute}` : 'Modo Empleado'}
                                         </span>}
+                                        {!isLocked && daysRemaining !== null && (
+                                            <span className="bg-indigo-100 text-indigo-700 text-[10px] px-3 py-1 rounded-full font-black uppercase mt-2">{daysRemaining} días restantes</span>
+                                        )}
                                     </div>
                                     <div className="flex gap-2 flex-1 justify-end z-10 pt-4">
                                         {!isRestrictedRole && (
@@ -2904,9 +2990,14 @@
                                         e.preventDefault();
                                         if (!newRouteInput.trim()) return;
                                         if (!isOnline) return showNotify("Se requiere conexión a Internet");
-                                        
+                                        // Respect maxRoutes from profile
                                         const currentRoutes = userProfile?.routes || ['General'];
-                                        if (currentRoutes.includes(newRouteInput.trim())) {
+                                        if (userProfile?.maxRoutes !== undefined && currentRoutes.length >= userProfile.maxRoutes) {
+                                            showNotify(`Límite de rutas alcanzado (${userProfile.maxRoutes}).`);
+                                            return;
+                                        }
+                                        
+                                        if ((userProfile?.routes || ['General']).includes(newRouteInput.trim())) {
                                             showNotify("Esa ruta ya existe");
                                             return;
                                         }
