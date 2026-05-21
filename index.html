@@ -904,15 +904,12 @@
                             description = installmentsCovered > 0 ? `Pago Interés (${installmentsCovered} cuotas)` : (paidMora > 0 ? 'Pago de Mora' : 'Abono parcial a interés');
                         }
                     } else if (loanType === 'TIPO SAM') {
-                        // TIPO SAM: Direct debt reduction
-                        newDebt = Math.max(0, client.totalDebt - amount);
-                        installmentsCovered = 1; // Count as one installment covered
-                        description = 'Abono de Cuota (SAM)';
-                        if (amount < instBaseAmount) {
-                            surplus = amount;
-                        } else {
-                            newPaid = Math.min(client.loan.totalInstallments || 1, currentPaid + Math.floor(amount / instBaseAmount));
-                            nextDate = calculateNextDate(nextDate, client.loan.frequency);
+                        if (transactionType === 'Interés') {
+                            newDebt = client.totalDebt; // Does not reduce principal
+                            description = 'Pago de rédito';
+                        } else if (transactionType === 'Capital') {
+                            newDebt = Math.max(0, client.totalDebt - amount); // Reduces principal
+                            description = 'Abono a capital';
                         }
                     } else if (loanType === 'Amortizado') {
                         if (transactionType === 'Capital') {
@@ -2602,10 +2599,18 @@
                                 </div>
 
                                 <div className="space-y-6">
-                                    {(selectedClient.loan?.type === 'Rédito' || selectedClient.loan?.type === 'Amortizado') && (
+                                    {(selectedClient.loan?.type === 'Rédito' || selectedClient.loan?.type === 'Amortizado' || selectedClient.loan?.type === 'TIPO SAM') && (
                                         <div className="flex bg-slate-100 p-1 rounded-2xl mb-4">
-                                            <button onClick={() => setTransactionType('Interés')} className={`flex-1 py-3 rounded-xl font-black text-xs transition-all ${transactionType === 'Interés' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400'}`}>Pago Normal</button>
-                                            <button onClick={() => setTransactionType('Capital')} className={`flex-1 py-3 rounded-xl font-black text-xs transition-all ${transactionType === 'Capital' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400'}`}>Abono Extra a Capital</button>
+                                            <button onClick={() => {
+                                                setTransactionType('Interés');
+                                                // For TIPO SAM, default the input to the installment (interest cuota)
+                                                try { const el = document.getElementById('inputAmount'); if(el && selectedClient.loan?.type === 'TIPO SAM') el.value = selectedClient.loan?.installmentAmount || 0; } catch(e){}
+                                            }} className={`flex-1 py-3 rounded-xl font-black text-xs transition-all ${transactionType === 'Interés' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400'}`}>Pago Normal</button>
+                                            <button onClick={() => {
+                                                setTransactionType('Capital');
+                                                // For TIPO SAM, allow custom amount (clear to 0 to let user type)
+                                                try { const el = document.getElementById('inputAmount'); if(el && selectedClient.loan?.type === 'TIPO SAM') el.value = 0; } catch(e){}
+                                            }} className={`flex-1 py-3 rounded-xl font-black text-xs transition-all ${transactionType === 'Capital' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400'}`}>Abono Extra a Capital</button>
                                         </div>
                                     )}
                                     <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100 flex flex-col gap-3">
@@ -2637,7 +2642,13 @@
                                         </div>
                                         <div className="space-y-2 text-center">
                                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Recibido ({currency})</label>
-                                            <input id="inputAmount" type="number" defaultValue={Math.round((transactionType === 'Capital' ? 0 : (selectedClient.loan?.installmentAmount - (selectedClient.loan?.partialCredit || 0))) + (selectedClient.loan?.mora || 0))} className="w-full p-4 bg-slate-50 border rounded-2xl font-black text-center text-xl focus:border-indigo-500 outline-none text-indigo-600" />
+                                            <input id="inputAmount" type="number" defaultValue={(() => {
+                                                try {
+                                                    if (transactionType === 'Capital') return 0;
+                                                    if (selectedClient.loan?.type === 'TIPO SAM' && transactionType === 'Interés') return selectedClient.loan?.installmentAmount || 0;
+                                                    return Math.round((selectedClient.loan?.installmentAmount - (selectedClient.loan?.partialCredit || 0)) + (selectedClient.loan?.mora || 0));
+                                                } catch (e) { return 0; }
+                                            })()} className="w-full p-4 bg-slate-50 border rounded-2xl font-black text-center text-xl focus:border-indigo-500 outline-none text-indigo-600" />
                                         </div>
                                     </div>
                                     <button disabled={isProcessing} onClick={() => recordTransaction(selectedClientId, document.getElementById('inputAmount').value, document.getElementById('inputDate').value)} className="w-full bg-emerald-500 text-white p-5 rounded-[2rem] font-black text-lg shadow-xl active:scale-95 transition-all disabled:opacity-50">
