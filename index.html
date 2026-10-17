@@ -315,6 +315,8 @@
             const printerDeviceRef = useRef(null);
             const printerCharRef = useRef(null);
             const [isPrinterReady, setIsPrinterReady] = useState(false);
+            // Evita que el listener del perfil nos saque de la vista actual cada vez que se guarda un ajuste
+            const profileNavDone = useRef(false);
 
             const [newRouteInput, setNewRouteInput] = useState('');
             const [expandedRoute, setExpandedRoute] = useState(null);
@@ -327,6 +329,16 @@
             const [loanForm, setLoanForm] = useState({
                 amount: '', interest: '', installments: '1', type: 'Amortizado', interestType: 'Fijo', frequency: 'Mensual', startDate: new Date().toISOString().split('T')[0]
             });
+
+            // P-GARANTIA: fotos de la mercancía dejada en garantía (cada una con su nombre y código)
+            const [guaranteeItems, setGuaranteeItems] = useState([]);
+            // Vista de Garantías
+            const [guaranteeTab, setGuaranteeTab] = useState('active');
+            const [guaranteeSearch, setGuaranteeSearch] = useState('');
+            const [markLostConfirm, setMarkLostConfirm] = useState(null);
+            const [restoreConfirm, setRestoreConfirm] = useState(null);
+            const [enlargedImg, setEnlargedImg] = useState(null);
+            const [markSoldConfirm, setMarkSoldConfirm] = useState(null);
 
             const [earningsStartDate, setEarningsStartDate] = useState('');
             const [earningsEndDate, setEarningsEndDate] = useState('');
@@ -488,6 +500,17 @@
                     padText("Cliente:", data.client.name.substring(0, charsPerLine - 10));
                     hr();
                     padText("Concepto:", data.transaction.description.substring(0, charsPerLine - 11));
+                    const _modLabel = loanModalityLabel(data.client.loan);
+                    if (_modLabel) padText("Modalidad:", _modLabel.substring(0, charsPerLine - 12));
+                    if (data.client.loan?.type === 'P-GARANTIA' && data.client.loan?.guaranteeDeadline) padText("Vence Garantia:", data.client.loan.guaranteeDeadline);
+                    const _gItems = data.client.loan?.guaranteeItems || [];
+                    if (data.client.loan?.type === 'P-GARANTIA' && _gItems.length > 0) {
+                        hr();
+                        addText("GARANTIA:\n");
+                        _gItems.forEach(g => {
+                            addText((((g.code ? g.code + " " : "") + (g.name || "Sin nombre"))).substring(0, charsPerLine) + "\n");
+                        });
+                    }
                     
                     addBytes([0x1B, 0x45, 0x01]); 
                     padText("Recibido:", `${currency}${Math.round(data.transaction.amount).toLocaleString()}`);
@@ -557,16 +580,85 @@
                 return clients;
             }, [clients, userProfile]);
 
+            // P-GARANTIA: fecha límite de la garantía (DD/MM/YYYY). Info de vencimiento.
+            const parseGuaranteeDate = (deadlineStr) => {
+                if (!deadlineStr) return null;
+                const parts = deadlineStr.split('/');
+                if (parts.length !== 3) return null;
+                const d = new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
+                return isNaN(d.getTime()) ? null : d;
+            };
+            const guaranteeDeadlineInfo = (deadlineStr) => {
+                const d = parseGuaranteeDate(deadlineStr);
+                if (!d) return { label: null, expired: false, daysLeft: null };
+                d.setHours(0, 0, 0, 0);
+                const today = new Date(); today.setHours(0, 0, 0, 0);
+                const daysLeft = Math.round((d - today) / 86400000);
+                return { label: deadlineStr, expired: daysLeft < 0, daysLeft };
+            };
+
+            // Etiqueta explícita de la modalidad para los recibos de pago
+            const loanModalityLabel = (loan) => {
+                if (!loan) return '';
+                if (loan.type === 'P-GARANTIA') {
+                    return loan.guaranteeCalc === 'amortizado' ? 'P-GARANTIA · Cuota con Garantía' : 'P-GARANTIA · Rédito con Garantía';
+                }
+                if (loan.type === 'Rédito') return 'Solo Rédito';
+                if (loan.type === 'TIPO SAM') return 'TIPO SAM';
+                return 'Amortizado';
+            };
+
+            // P-GARANTIA: listas de perfiles con mercancía en garantía y perdidos (vencidas primero)
+            const activeGuarantees = useMemo(() => displayedClients
+                .filter(c => c.loan && c.loan.type === 'P-GARANTIA' && c.loan.guaranteeStatus !== 'lost')
+                .sort((a, b) => {
+                    const da = parseGuaranteeDate(a.loan?.guaranteeDeadline);
+                    const db = parseGuaranteeDate(b.loan?.guaranteeDeadline);
+                    const ta = da ? da.getTime() : Infinity;
+                    const tb = db ? db.getTime() : Infinity;
+                    return ta - tb;
+                }), [displayedClients]);
+            const lostGuarantees = useMemo(() => displayedClients.filter(c => c.loan && c.loan.type === 'P-GARANTIA' && c.loan.guaranteeStatus === 'lost'), [displayedClients]);
+
+            // Todos los códigos de garantía ya usados (para que no se repitan)
+            const allGuaranteeCodes = useMemo(() => {
+                const s = new Set();
+                clients.forEach(c => (c.loan?.guaranteeItems || []).forEach(g => {
+                    const code = (g.code || '').toUpperCase().trim();
+                    if (code) s.add(code);
+                }));
+                return s;
+            }, [clients]);
+            const isCodeInUse = (code, excludeId) => {
+                const c = (code || '').toUpperCase().trim();
+                if (!c) return false;
+                if (allGuaranteeCodes.has(c)) return true;
+                return guaranteeItems.some(it => it.id !== excludeId && (it.code || '').toUpperCase().trim() === c);
+            };
+            // Genera el siguiente código libre (G-001, G-002...) chequeando los que ya existen
+            const generateNextCode = (items, excludeId) => {
+                const used = new Set(allGuaranteeCodes);
+                (items || []).forEach(it => { if (it.id !== excludeId) { const c = (it.code || '').toUpperCase().trim(); if (c) used.add(c); } });
+                const nums = [...used].map(c => { const m = /^G-(\d+)$/.exec(c); return m ? parseInt(m[1], 10) : 0; });
+                let n = Math.max(0, ...nums) + 1;
+                while (used.has('G-' + String(n).padStart(3, '0'))) n++;
+                return 'G-' + String(n).padStart(3, '0');
+            };
+
             // DEUDA_THRESHOLD constant to prevent floating point errors
             const DEUDA_THRESHOLD = 0.1;
             
+            // P-GARANTIA puede calcularse como Rédito o como Amortizado: este helper devuelve el tipo efectivo para la lógica financiera
+            const effLoanTypeOf = (loan) => (loan && loan.type === 'P-GARANTIA' && loan.guaranteeCalc === 'amortizado') ? 'Amortizado' : (loan?.type || '');
+            const isReditoStyle = (loan) => { const t = effLoanTypeOf(loan); return t === 'Rédito' || t === 'P-GARANTIA'; };
+
             const loanPreview = useMemo(() => {
                 const amount = parseFloat(loanForm.amount) || 0;
                 const interest = parseFloat(loanForm.interest) || 0;
                 const inst = parseInt(loanForm.installments) || 1;
                 
-                if (loanForm.type === 'Rédito') {
-                    // Rédito: Monthly interest only, no amortization
+                if (isReditoStyle({ type: loanForm.type, guaranteeCalc: loanForm.guaranteeCalc })) {
+                    // Rédito / P-GARANTIA (modo rédito): Monthly interest only, no amortization
                     return { totalToPay: amount, installmentAmount: amount * (interest / 100), totalInterest: amount * (interest / 100) };
                 } else if (loanForm.type === 'TIPO SAM') {
                     // TIPO SAM: Fixed interest per installment, not compounded
@@ -639,6 +731,37 @@
 
             const normalizeStr = (str) => str ? str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase() : '';
 
+            // Buscador de Garantías: coincide con cliente, teléfono, cédula, nombre o código de mercancía
+            const matchesGuaranteeSearch = (c) => {
+                const s = normalizeStr(guaranteeSearch.trim());
+                if (!s) return true;
+                const hay = normalizeStr([c.name, c.phone, c.cedula, ...((c.loan?.guaranteeItems || []).flatMap(g => [g.name, g.code]))].filter(Boolean).join(' '));
+                return s.split(/\s+/).every(w => hay.includes(w));
+            };
+            // Perdidos aplanados: una tarjeta por artículo (la mercancía es la protagonista)
+            const lostItemsFlat = useMemo(() => {
+                const out = [];
+                lostGuarantees.filter(matchesGuaranteeSearch).forEach(c => {
+                    const items = c.loan.guaranteeItems || [];
+                    if (items.length === 0) out.push({ client: c, item: null, idx: -1 });
+                    else items.forEach((g, idx) => out.push({ client: c, item: g, idx }));
+                });
+                return out;
+            }, [lostGuarantees, guaranteeSearch]);
+            // Marcar artículo perdido como vendido: se borra la foto para no acumular imágenes
+            const handleMarkItemSold = async () => {
+                if (!markSoldConfirm) return;
+                const { client, idx } = markSoldConfirm;
+                setIsProcessing(true);
+                try {
+                    const items = (client.loan.guaranteeItems || []).map((it, i) => i === idx ? { ...it, img: null, sold: true, soldAt: formatDate(new Date()) } : it);
+                    if (isOnline) await db.collection('users').doc(adminUid).collection('clients').doc(client.id).update({ 'loan.guaranteeItems': items });
+                    showNotify("Marcada como vendida. Foto eliminada.");
+                } catch (e) { showNotify("Error al guardar"); }
+                setIsProcessing(false);
+                setMarkSoldConfirm(null);
+            };
+
             const calculateNextDate = (currentDateStr, frequency) => {
                 if (!currentDateStr || currentDateStr.includes('NaN')) currentDateStr = formatDate(new Date());
                 const parts = currentDateStr.split('/');
@@ -657,6 +780,8 @@
                 let unsubIdToken = null;
                 const unsubscribe = auth.onAuthStateChanged(async usr => {
                     setUser(usr);
+                    // Reinicia la navegación inicial del perfil para esta sesión
+                    profileNavDone.current = false;
                     // Clean up old listeners to prevent memory leaks
                     if (unsubProfile) {
                         unsubProfile();
@@ -699,7 +824,15 @@
                                             let endDate = null;
 
                                             if (subEnd) {
-                                                endDate = typeof subEnd.toDate === 'function' ? subEnd.toDate() : new Date(subEnd);
+                                                if (typeof subEnd.toDate === 'function') {
+                                                    endDate = subEnd.toDate();
+                                                } else if (typeof subEnd === 'string' && /^\d{4}-\d{2}-\d{2}/.test(subEnd)) {
+                                                    // 'YYYY-MM-DD' se interpreta en hora local hasta el fin del día (evita bloqueo anticipado por UTC)
+                                                    const p = subEnd.split('-').map(Number);
+                                                    endDate = new Date(p[0], p[1] - 1, p[2], 23, 59, 59);
+                                                } else {
+                                                    endDate = new Date(subEnd);
+                                                }
                                             }
 
                                             if (status === 'blocked') {
@@ -731,11 +864,18 @@
 
                                         setUserProfile(profile);
                                         setAdminUid(profile.role === 'cobrador' ? profile.adminUid : usr.uid);
-                                        setView('dashboard');
+                                        // Solo ir al inicio en la primera carga del perfil; los cambios de ajustes no deben sacarnos de la vista actual
+                                        if (!profileNavDone.current) {
+                                            profileNavDone.current = true;
+                                            setView('dashboard');
+                                        }
                                     } else {
                                         setUserProfile({ role: 'admin' });
                                         setAdminUid(usr.uid);
-                                        setView('dashboard');
+                                        if (!profileNavDone.current) {
+                                            profileNavDone.current = true;
+                                            setView('dashboard');
+                                        }
                                         setIsLocked(false);
                                         setDaysRemaining(null);
                                     }
@@ -942,7 +1082,7 @@
 
                 try {
                     let newHistory = Array.isArray(client.history) ? [...client.history] : [];
-                    const loanType = client.loan.type;
+                    const loanType = effLoanTypeOf(client.loan);
                     const instBaseAmount = client.loan.installmentAmount || 0;
                     const partialCredit = client.loan.partialCredit || 0;
                     const paidMora = client.loan.mora || 0;
@@ -964,7 +1104,7 @@
                     let description = '';
 
                     // CORRECTED LOGIC: Separate handling for each loan type
-                    if (loanType === 'Rédito') {
+                    if (loanType === 'Rédito' || loanType === 'P-GARANTIA') {
                         if (transactionType === 'Capital') {
                             // Pure capital payment
                             newDebt = Math.max(0, client.totalDebt - totalMoneyAvailable);
@@ -1015,7 +1155,7 @@
                     let gainAmount = 0;
                     
                     // Calculate gain based on loan type
-                    if (loanType === 'Rédito' || loanType === 'TIPO SAM') {
+                    if (loanType === 'Rédito' || loanType === 'TIPO SAM' || loanType === 'P-GARANTIA') {
                         gainAmount = transactionType === 'Interés' || loanType === 'TIPO SAM' ? amount : 0;
                     } else {
                         // Amortizado
@@ -1042,7 +1182,7 @@
                         description: description,
                         ref: Math.floor(1000 + Math.random() * 8999).toString(),
                         installmentStatus: installmentsCovered > 0 ? 'Pagada' : 'Abono',
-                        remainingInstallments: (loanType === 'Rédito') ? '∞' : (client.loan.totalInstallments || 1) - newPaid,
+                        remainingInstallments: (loanType === 'Rédito' || loanType === 'P-GARANTIA') ? '∞' : (client.loan.totalInstallments || 1) - newPaid,
                         paidMora: paidMora, 
                         remainingDebt: newDebt
                     };
@@ -1312,8 +1452,9 @@
                     const baseNewDebt = currentDebt + addedAmount;
                     const interestAmountPerCuota = baseNewDebt * (newInterest/100);
                     const totalInterest = currentClient.loan.interestType === 'Fijo' ? interestAmountPerCuota : interestAmountPerCuota * newInst;
-                    const total = currentClient.loan.type === 'Rédito' ? baseNewDebt : baseNewDebt + totalInterest;
-                    const newInstallmentAmount = currentClient.loan.type === 'Rédito' ? interestAmountPerCuota : total / newInst;
+                    const refEff = effLoanTypeOf(currentClient.loan);
+                    const total = (refEff === 'Rédito' || refEff === 'P-GARANTIA') ? baseNewDebt : baseNewDebt + totalInterest;
+                    const newInstallmentAmount = (refEff === 'Rédito' || refEff === 'P-GARANTIA') ? interestAmountPerCuota : total / newInst;
                     
                     const p = db.collection('users').doc(adminUid).collection('clients').doc(selectedClientId).update({
                         totalDebt: total, 'loan.amount': currentClient.loan.amount + addedAmount, 'loan.interest': newInterest,
@@ -1322,7 +1463,7 @@
                             id: Date.now().toString(), amount: 0, surplus: 0, date: formatDate(new Date()), type: 'Ajuste',
                             description: `Refinanciamiento: +${currency}${addedAmount} / ${newInterest}% / ${newInst} Cuotas`,
                             ref: 'REF-' + Math.floor(1000 + Math.random() * 8999), installmentStatus: 'N/A',
-                            remainingInstallments: currentClient.loan.type === 'Rédito' ? '∞' : newInst - currentClient.loan.paidInstallments, paidMora: 0
+                            remainingInstallments: (refEff === 'Rédito' || refEff === 'P-GARANTIA') ? '∞' : newInst - currentClient.loan.paidInstallments, paidMora: 0
                         }, ...(currentClient.history || [])]
                     });
                     if(isOnline) await p;
@@ -1383,8 +1524,9 @@
 
             const netCapitalOnStreet = useMemo(() => displayedClients.reduce((acc, curr) => {
                 if(curr.status === 'pending_approval') return acc;
-                if(curr.loan && curr.loan.type === 'Rédito') return acc + curr.totalDebt;
-                if(curr.loan && curr.loan.type !== 'Rédito') return acc + curr.loan.amount;
+                const effT = effLoanTypeOf(curr.loan);
+                if(curr.loan && (effT === 'Rédito' || effT === 'P-GARANTIA')) return acc + curr.totalDebt;
+                if(curr.loan && effT !== 'Rédito' && effT !== 'P-GARANTIA') return acc + curr.loan.amount;
                 return acc;
             }, 0), [displayedClients]);
             
@@ -1399,7 +1541,7 @@
             const allGainsBreakdown = useMemo(() => {
                 const list = [...storedGains];
                 displayedClients.forEach(c => {
-                    const isRedito = c.loan?.type === 'Rédito';
+                    const isRedito = isReditoStyle(c.loan);
                     const profitRatio = (c.loan && c.loan.totalToPay > 0 && !isRedito) ? (c.loan.totalToPay - c.loan.amount) / c.loan.totalToPay : 0;
                     if ((c.totalDebt || 0) > 0.1 && c.loan && c.loan.totalToPay > 0) {
                         let pendingGain = 0;
@@ -1471,7 +1613,7 @@
 
             const pendingProfit = useMemo(() => displayedClients.reduce((acc, curr) => {
                 if (curr.loan && curr.loan.totalToPay > 0) {
-                    const isRedito = curr.loan.type === 'Rédito';
+                    const isRedito = isReditoStyle(curr.loan);
                     if (isRedito) return acc + ((curr.loan.installmentAmount || 0) - (curr.loan.partialCredit || 0) + (curr.loan.mora || 0));
                     else {
                         const profitRatio = (curr.loan.totalToPay - curr.loan.amount) / curr.loan.totalToPay;
@@ -1499,7 +1641,7 @@
             const isRestrictedRole = userProfile?.role === 'empleado' || userProfile?.role === 'cobrador';
 
             return (
-                <div className="max-w-md mx-auto min-h-screen bg-slate-50 shadow-2xl relative overflow-x-hidden">
+                <div className="mx-auto min-h-screen bg-slate-50 shadow-2xl relative overflow-x-hidden max-w-md md:max-w-2xl lg:max-w-5xl xl:max-w-6xl 2xl:max-w-7xl">
                     {!isOnline && (
                         <div className="bg-orange-500 text-white text-[10px] font-black uppercase tracking-widest text-center py-2.5 flex items-center justify-center gap-2 z-[105] sticky top-0 shadow-md border-b border-orange-600 no-print">
                             <Icon name="alert-triangle" size={14} /> Modo Offline (Sincronización Pendiente)
@@ -1779,23 +1921,6 @@
                         </div>
                     )}
 
-                    {wipeSystemConfirm && (
-                        <div className="fixed inset-0 bg-red-900/80 backdrop-blur-md z-[300] flex items-center justify-center p-6">
-                            <div className="bg-white rounded-[2.5rem] p-8 w-full max-w-sm text-center shadow-2xl animate-in border-4 border-red-500">
-                                <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4"><Icon name="trash-2" size={32}/></div>
-                                <h3 className="text-xl font-black text-red-600 mb-2 uppercase">¡Peligro Extremo!</h3>
-                                <p className="text-xs text-slate-600 font-bold mb-4">Vas a borrar el historial de pagos de TODOS los clientes y vaciarás el registro de ganancias.</p>
-                                <form onSubmit={handleWipeSystem}>
-                                    <input type="password" value={wipePassword} onChange={e => setWipePassword(e.target.value)} placeholder="Contraseña de tu cuenta" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-center focus:border-red-500 outline-none mb-6 text-slate-800" required />
-                                    <div className="flex gap-3">
-                                        <button type="button" onClick={() => { setWipeSystemConfirm(false); setWipePassword(''); }} className="flex-1 py-3 bg-slate-100 rounded-xl font-black text-sm text-slate-600 active:scale-95 transition-transform">Cancelar</button>
-                                        <button type="submit" disabled={isProcessing} className="flex-1 py-3 bg-red-600 text-white rounded-xl font-black text-sm disabled:opacity-50 active:scale-95 transition-transform">Sí, Borrar Todo</button>
-                                    </div>
-                                </form>
-                            </div>
-                        </div>
-                    )}
-
                     {deleteCobradorConfirm && (
                         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-6">
                             <div className="bg-white rounded-[2.5rem] p-8 w-full max-w-sm text-center shadow-2xl animate-in">
@@ -1936,7 +2061,7 @@
                                         )}
                                     </div>
                                     <div className="flex flex-col items-center justify-center z-10 -mt-2">
-                                        <LogoSVG customUrl={userProfile?.logo} className="w-40 h-40 drop-shadow-md" color="#4f46e5" />
+                                        <LogoSVG customUrl={userProfile?.logo} className="w-40 h-40 lg:w-32 lg:h-32 drop-shadow-md" color="#4f46e5" />
                                         {isRestrictedRole && <span className="bg-amber-100 text-amber-700 text-[9px] px-2 py-0.5 rounded-full font-black uppercase tracking-widest inline-block -mt-6 relative z-10 shadow-sm border border-amber-200">
                                             {userProfile?.role === 'cobrador' ? `Ruta: ${userProfile.assignedRoute}` : 'Modo Empleado'}
                                         </span>}
@@ -1953,16 +2078,23 @@
                                         )}
                                     </div>
                                 </div>
-                                <div className="bg-indigo-600 rounded-[2.5rem] p-7 text-white shadow-2xl shadow-indigo-600/40 relative overflow-hidden">
+                                <div className="xl:grid xl:grid-cols-3 xl:gap-6 xl:items-stretch">
+                                <div className="bg-indigo-600 rounded-[2.5rem] p-7 text-white shadow-2xl shadow-indigo-600/40 relative overflow-hidden xl:col-span-2">
                                     <div className="absolute -right-10 -top-10 w-40 h-40 bg-white/10 rounded-full blur-2xl"></div>
                                     <div className="absolute -left-10 -bottom-10 w-40 h-40 bg-indigo-900/30 rounded-full blur-2xl"></div>
                                     <div className="relative z-10 flex justify-between items-end gap-2">
                                         <div className="flex-1 min-w-0">
-                                            <p className="text-[8px] sm:text-[10px] font-black uppercase tracking-widest text-indigo-200 mb-1 sm:mb-2 truncate">Capital en la Calle</p>
-                                            <h1 className="heading-font text-2xl sm:text-3xl md:text-4xl font-black tracking-tighter truncate">{currency}{privacyMode && !isRestrictedRole ? '***,***' : Math.round(netCapitalOnStreet).toLocaleString()}</h1>
+                                            <p className="text-[8px] sm:text-[10px] font-black uppercase tracking-widest text-indigo-200 mb-1 sm:mb-2">Capital en la Calle</p>
+                                            <h1 className="heading-font text-2xl sm:text-3xl md:text-4xl font-black tracking-tighter break-words">{currency}{privacyMode && !isRestrictedRole ? '***,***' : Math.round(netCapitalOnStreet).toLocaleString()}</h1>
                                             <div className="mt-1 sm:mt-2 bg-emerald-500/20 px-2 sm:px-3 py-1 rounded-lg inline-block border border-emerald-500/30 max-w-full">
-                                                <p className="text-[7px] sm:text-[9px] text-emerald-300 font-black uppercase tracking-widest truncate">G. Pendiente: {currency}{privacyMode && !isRestrictedRole ? '***' : Math.round(pendingProfit).toLocaleString()}</p>
+                                                <p className="text-[8px] sm:text-[9px] text-emerald-300 font-black uppercase tracking-widest leading-relaxed">G. Pendiente: {currency}{privacyMode && !isRestrictedRole ? '***' : Math.round(pendingProfit).toLocaleString()}</p>
                                             </div>
+                                            {(!isRestrictedRole && parseFloat(userProfile?.initialCapital) > 0) && (
+                                                <div className="mt-1 sm:mt-2 bg-white/10 px-2 sm:px-3 py-1.5 rounded-lg inline-block border border-white/20 max-w-full ml-1">
+                                                    <p className="text-[8px] sm:text-[9px] text-indigo-100 font-black uppercase tracking-widest leading-relaxed">Capital Inicial: {currency}{privacyMode ? '***' : Math.round(parseFloat(userProfile.initialCapital)).toLocaleString()}</p>
+                                                    <p className="text-[8px] sm:text-[9px] text-emerald-200 font-black uppercase tracking-widest leading-relaxed">Disponible: {currency}{privacyMode ? '***' : Math.round(Math.max(0, parseFloat(userProfile.initialCapital) - netCapitalOnStreet)).toLocaleString()}</p>
+                                                </div>
+                                            )}
                                         </div>
                                         <div className="text-right flex-shrink-0">
                                             <p className="text-[8px] sm:text-[10px] font-black uppercase tracking-widest text-indigo-200 mb-1 sm:mb-2">Cobrado Hoy</p>
@@ -1973,7 +2105,7 @@
                                         </div>
                                     </div>
                                 </div>
-                                <div className="mt-6 grid grid-cols-3 gap-2">
+                                <div className="mt-6 xl:mt-0 grid grid-cols-4 xl:grid-cols-2 gap-2 md:gap-4">
                                     <button onClick={() => setView('add_client')} className="bg-slate-50 border border-slate-100 py-3 rounded-2xl flex flex-col items-center justify-center gap-1.5 active:scale-95 transition-transform shadow-sm">
                                         <div className="w-7 h-7 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center"><Icon name="user-plus" size={14}/></div>
                                         <span className="font-black text-[9px] text-slate-700 uppercase tracking-widest text-center">Nuevo<br/>Cliente</span>
@@ -1981,6 +2113,10 @@
                                     <button onClick={() => setView('portfolio')} className="bg-slate-50 border border-slate-100 py-3 rounded-2xl flex flex-col items-center justify-center gap-1.5 active:scale-95 transition-transform shadow-sm">
                                         <div className="w-7 h-7 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center"><Icon name="users" size={14}/></div>
                                         <span className="font-black text-[9px] text-slate-700 uppercase tracking-widest text-center">Ver<br/>Cartera</span>
+                                    </button>
+                                    <button onClick={() => { setGuaranteeTab('active'); setGuaranteeSearch(''); setView('guarantees'); }} className="bg-slate-50 border border-slate-100 py-3 rounded-2xl flex flex-col items-center justify-center gap-1.5 active:scale-95 transition-transform shadow-sm">
+                                        <div className="w-7 h-7 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center"><Icon name="shield" size={14}/></div>
+                                        <span className="font-black text-[9px] text-slate-700 uppercase tracking-widest text-center">Garan<br/>tías</span>
                                     </button>
                                     {!isRestrictedRole ? (
                                         <button onClick={() => setView('routes_panel')} className="bg-slate-50 border border-slate-100 py-3 rounded-2xl flex flex-col items-center justify-center gap-1.5 active:scale-95 transition-transform shadow-sm">
@@ -1992,6 +2128,7 @@
                                             <div className="w-7 h-7 bg-slate-200 text-slate-400 rounded-full flex items-center justify-center"><Icon name="map" size={14}/></div>
                                         </div>
                                     )}
+                                </div>
                                 </div>
                             </header>
 
@@ -2019,7 +2156,7 @@
                                         </div>
                                     </div>
                                     
-                                    <div className="space-y-3 pb-4">
+                                    <div className="space-y-3 pb-4 lg:grid lg:grid-cols-2 lg:gap-4 lg:space-y-0">
                                         {agendaTab === 'vencidos' && overdueClients.map(c => (
                                             <div key={c.id} onClick={() => { setSelectedClientId(c.id); setView('profile'); }} className="p-4 bg-red-50 border border-red-100 rounded-[1.5rem] flex justify-between items-center cursor-pointer hover:bg-red-100 active:scale-[0.98] transition-all">
                                                 <div className="flex items-center gap-3">
@@ -2116,7 +2253,7 @@
                                 </div>
                             </div>
 
-                            <main className="p-6 pt-2 space-y-4 pb-24">
+                            <main className="p-6 pt-2 space-y-4 pb-24 lg:grid lg:grid-cols-2 xl:grid-cols-3 lg:gap-4 lg:space-y-0">
                                 {portfolioFilteredClients.slice(0, visibleClientsCount).map(c => {
                                     let statusText = 'SIN PRÉSTAMO'; let statusColor = 'bg-slate-100 text-slate-500 border-slate-200';
                                     if (c.status === 'pending_approval' || c.pendingLoan) {
@@ -2135,8 +2272,9 @@
                                         <div onClick={() => setExpandedClient(expandedClient === c.id ? null : c.id)} className="p-4 flex justify-between items-center cursor-pointer hover:bg-slate-50 active:bg-slate-100 transition-colors">
                                             <div className="flex gap-3 items-center">
                                                 <div className="w-10 h-10 rounded-[1rem] flex items-center justify-center font-black text-sm bg-indigo-50 text-indigo-600 border border-indigo-100">{c.name[0]}</div>
-                                                <div>
-                                                    <h4 className="font-black text-slate-800 text-sm leading-tight max-w-[130px] truncate">{c.name}</h4>
+                                                <div className="min-w-0">
+                                                    <h4 className="font-black text-slate-800 text-sm leading-tight line-clamp-2 break-words">{c.name}</h4>
+                                                    <p className="text-[9px] font-bold text-slate-400 tracking-widest mt-0.5 uppercase">Ruta: {c.route || 'General'}</p>
                                                     <p className={`text-[10px] font-black tracking-widest mt-0.5 ${c.totalDebt > 0.1 ? 'text-slate-500' : 'text-emerald-500'}`}>
                                                         {c.totalDebt > 0.1 ? `${currency}${(c.totalDebt || 0).toLocaleString()} DEUDA` : 'SIN DEUDA'}
                                                     </p>
@@ -2191,19 +2329,236 @@
                                 )})}
                                 
                                 {portfolioFilteredClients.length > visibleClientsCount && (
-                                    <button onClick={() => setVisibleClientsCount(prev => prev + 20)} className="w-full py-4 bg-indigo-50 text-indigo-600 rounded-2xl font-black text-sm active:scale-95 transition-transform mt-2 border border-indigo-100 shadow-sm">
+                                    <button onClick={() => setVisibleClientsCount(prev => prev + 20)} className="w-full py-4 bg-indigo-50 text-indigo-600 rounded-2xl font-black text-sm active:scale-95 transition-transform mt-2 border border-indigo-100 shadow-sm lg:col-span-2">
                                         Cargar más clientes ({portfolioFilteredClients.length - visibleClientsCount} restantes)
                                     </button>
                                 )}
 
                                 {portfolioFilteredClients.length === 0 && (
-                                    <div className="text-center py-10">
+                                    <div className="text-center py-10 lg:col-span-2">
                                         <div className="w-16 h-16 bg-slate-100 text-slate-300 rounded-full flex items-center justify-center mx-auto mb-3"><Icon name="users" size={24}/></div>
                                         <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Sin resultados</p>
                                     </div>
                                 )}
                             </main>
                             <button onClick={() => setView('add_client')} className="fixed bottom-8 right-8 w-16 h-16 bg-indigo-600 text-white rounded-[2rem] shadow-2xl flex items-center justify-center z-20 hover:scale-105 active:scale-95 transition-all border-4 border-white"><Icon name="user-plus" size={28} /></button>
+                        </div>
+                    )}
+
+                    {/* GARANTÍAS */}
+                    {view === 'guarantees' && (
+                        <div className="animate-in bg-white min-h-screen pb-20">
+                            <header className="p-6 border-b flex items-center gap-4 bg-white sticky top-0 z-10 shadow-sm">
+                                <button onClick={() => setView('dashboard')} className="p-3 text-slate-400 bg-slate-50 rounded-2xl hover:bg-slate-100"><Icon name="arrow-left"/></button>
+                                <h2 className="heading-font text-xl font-black text-slate-800">Garantías</h2>
+                            </header>
+                            <main className="p-6 space-y-5">
+                                <div className="relative">
+                                    <Icon name="search" size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"/>
+                                    <input type="text" placeholder="Buscar cliente o mercancía (tv, cadena, radio, G-001...)" value={guaranteeSearch} onChange={e => setGuaranteeSearch(e.target.value)} className="w-full pl-11 pr-11 p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-xs outline-none focus:border-emerald-500 shadow-sm" />
+                                    {guaranteeSearch && (
+                                        <button onClick={() => setGuaranteeSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-slate-600"><Icon name="x" size={14}/></button>
+                                    )}
+                                </div>
+                                <div className="flex bg-slate-50 rounded-2xl p-1.5 border border-slate-100">
+                                    <button onClick={() => setGuaranteeTab('active')} className={`flex-1 py-3 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all ${guaranteeTab === 'active' ? 'bg-white text-emerald-600 shadow-sm border border-slate-100' : 'text-slate-400 hover:text-slate-600'}`}>En Garantía ({activeGuarantees.length})</button>
+                                    <button onClick={() => setGuaranteeTab('lost')} className={`flex-1 py-3 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all ${guaranteeTab === 'lost' ? 'bg-white text-red-600 shadow-sm border border-slate-100' : 'text-slate-400 hover:text-slate-600'}`}>Perdidos ({lostGuarantees.length})</button>
+                                </div>
+
+                                {guaranteeTab === 'active' && (
+                                    <div className="space-y-4 md:grid md:grid-cols-2 xl:grid-cols-3 md:gap-5 md:space-y-0">
+                                        {activeGuarantees.filter(matchesGuaranteeSearch).map(c => {
+                                            const dl = guaranteeDeadlineInfo(c.loan?.guaranteeDeadline);
+                                            return (
+                                            <div key={c.id} className={`bg-white border rounded-[1.8rem] p-5 shadow-sm space-y-4 ${dl.expired ? 'border-red-300 ring-2 ring-red-100' : 'border-emerald-100'}`}>
+                                                <div onClick={() => { setSelectedClientId(c.id); setView('profile'); }} className="flex justify-between items-start cursor-pointer">
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="w-11 h-11 bg-emerald-100 text-emerald-700 rounded-2xl flex items-center justify-center font-black text-lg">{c.name ? c.name[0] : '?'}</div>
+                                                        <div>
+                                                            <p className="font-black text-slate-800 text-sm leading-tight">{c.name}</p>
+                                                            <p className="text-[10px] text-slate-400 font-bold">{c.phone}</p>
+                                                        </div>
+                                                    </div>
+                                                    <div className="text-right">
+                                                        <p className="font-black text-emerald-600 text-lg">{currency}{Math.round(c.loan.amount || 0).toLocaleString()}</p>
+                                                        <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest">Préstamo</p>
+                                                    </div>
+                                                </div>
+                                                {dl.label && (
+                                                    <div className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border text-[10px] font-black uppercase tracking-widest ${dl.expired ? 'bg-red-50 border-red-200 text-red-600' : dl.daysLeft <= 7 ? 'bg-amber-50 border-amber-200 text-amber-600' : 'bg-slate-50 border-slate-200 text-slate-500'}`}>
+                                                        <Icon name="bell" size={14}/>
+                                                        <span>{dl.expired ? `Vencida el ${dl.label} — lista para marcar como perdida` : dl.daysLeft === 0 ? 'Vence hoy' : dl.daysLeft <= 7 ? `Vence en ${dl.daysLeft} ${dl.daysLeft === 1 ? 'día' : 'días'}` : `Límite: ${dl.label}`}</span>
+                                                    </div>
+                                                )}
+                                                <div className="space-y-2">
+                                                    {(c.loan.guaranteeItems || []).map((g, i) => (
+                                                        <div key={i} className="flex items-center gap-3 bg-slate-50 rounded-2xl p-2.5 border border-slate-100">
+                                                            {g.img ? (
+                                                                <img src={g.img} className="w-12 h-12 rounded-xl object-cover shrink-0" alt={g.name || 'Garantía'} />
+                                                            ) : (
+                                                                <div className="w-12 h-12 rounded-xl bg-slate-200 flex items-center justify-center text-slate-400 shrink-0"><Icon name="camera" size={16}/></div>
+                                                            )}
+                                                            <div className="flex-1 min-w-0">
+                                                                {g.code && <span className="text-[8px] font-black bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-md uppercase tracking-widest">{g.code}</span>}
+                                                                <p className="font-bold text-slate-700 text-sm line-clamp-2 break-words">{g.name || 'Sin nombre'}</p>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                    {(!c.loan.guaranteeItems || c.loan.guaranteeItems.length === 0) && (
+                                                        <p className="text-[10px] text-slate-400 font-bold text-center py-2">Sin fotos registradas</p>
+                                                    )}
+                                                </div>
+                                                {!isRestrictedRole && (
+                                                    <button onClick={() => setMarkLostConfirm(c)} className="w-full py-3.5 bg-red-50 text-red-600 border border-red-100 rounded-2xl font-black text-xs uppercase tracking-widest active:scale-95 transition-all">Marcar como Perdido</button>
+                                                )}
+                                            </div>
+                                            );
+                                        })}
+                                        {activeGuarantees.filter(matchesGuaranteeSearch).length === 0 && (
+                                            <div className="text-center py-10">
+                                                <div className="w-16 h-16 bg-emerald-50 text-emerald-300 rounded-full flex items-center justify-center mx-auto mb-3"><Icon name="shield" size={24}/></div>
+                                                <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{guaranteeSearch ? `Sin resultados para "${guaranteeSearch}"` : 'No hay garantías activas'}</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {guaranteeTab === 'lost' && (
+                                    <div className="space-y-4 md:grid md:grid-cols-2 xl:grid-cols-3 md:gap-5 md:space-y-0">
+                                        {lostItemsFlat.map(({ client: c, item: g, idx }) => (
+                                            <div key={c.id + '-' + idx} className="bg-white border border-red-100 rounded-[1.8rem] shadow-sm overflow-hidden">
+                                                {/* IMAGEN PROTAGONISTA (toca para ampliar) */}
+                                                {g && g.img && !g.sold ? (
+                                                    <button onClick={() => setEnlargedImg({ src: g.img, name: g.name })} className="w-full block relative group cursor-zoom-in">
+                                                        <img src={g.img} className="w-full h-56 object-cover" alt={g.name || 'Artículo perdido'} />
+                                                        <span className="absolute inset-0 bg-black/0 group-active:bg-black/20 transition-all flex items-end justify-center pb-3">
+                                                            <span className="bg-black/60 text-white text-[9px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full opacity-0 group-active:opacity-100 transition-opacity">Toca para ampliar</span>
+                                                        </span>
+                                                    </button>
+                                                ) : (
+                                                    <div className="w-full h-28 bg-slate-100 flex flex-col items-center justify-center text-slate-400 gap-1.5">
+                                                        {g && g.sold ? (
+                                                            <><span className="bg-emerald-500 text-white text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full">Vendida</span><span className="text-[9px] font-bold">Foto eliminada</span></>
+                                                        ) : (
+                                                            <Icon name="camera" size={28}/>
+                                                        )}
+                                                    </div>
+                                                )}
+                                                <div className="p-5 space-y-3">
+                                                    <div className="flex items-start justify-between gap-2">
+                                                        <div className="min-w-0">
+                                                            {g && g.code && <span className="inline-block text-[9px] font-black bg-red-100 text-red-600 px-2 py-0.5 rounded-md uppercase tracking-widest mb-1">{g.code}</span>}
+                                                            <h4 className="font-black text-slate-800 text-lg leading-tight break-words">{g ? (g.name || 'Sin nombre') : 'Sin artículos registrados'}</h4>
+                                                        </div>
+                                                        {g && g.sold ? (
+                                                            <span className="bg-emerald-100 text-emerald-700 text-[9px] font-black uppercase tracking-widest px-2.5 py-1 rounded-lg shrink-0">Vendida</span>
+                                                        ) : (
+                                                            <span className="bg-red-500 text-white text-[9px] font-black uppercase tracking-widest px-2.5 py-1 rounded-lg shrink-0">Perdido</span>
+                                                        )}
+                                                    </div>
+                                                    {g && g.sold && g.soldAt && <p className="text-[10px] text-emerald-600 font-black uppercase tracking-widest">Vendida el: {g.soldAt}</p>}
+                                                    {!(g && g.sold) && c.loan.lostAt && <p className="text-[10px] text-red-500 font-black uppercase tracking-widest">Perdido el: {c.loan.lostAt}</p>}
+                                                    {c.loan.guaranteeDeadline && <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest">Límite era: {c.loan.guaranteeDeadline}</p>}
+                                                    {/* DATOS DEL CLIENTE QUE LO PERDIÓ */}
+                                                    <div onClick={() => { setSelectedClientId(c.id); setView('profile'); }} className="flex items-center gap-3 bg-slate-50 border border-slate-100 rounded-2xl p-3 cursor-pointer active:scale-[0.98] transition-transform">
+                                                        <div className="w-9 h-9 bg-slate-200 text-slate-500 rounded-xl flex items-center justify-center font-black shrink-0">{c.name ? c.name[0] : '?'}</div>
+                                                        <div className="min-w-0">
+                                                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{g && g.sold ? 'Se la vendiste a' : 'Lo perdió'}</p>
+                                                            <p className="font-bold text-slate-700 text-xs truncate">{c.name}</p>
+                                                            <p className="text-[10px] text-slate-400 font-bold">{c.phone}</p>
+                                                        </div>
+                                                    </div>
+                                                    {!isRestrictedRole && !(g && g.sold) && (
+                                                        <div className="flex gap-2">
+                                                            {g && (
+                                                                <button onClick={() => setMarkSoldConfirm({ client: c, item: g, idx })} className="flex-1 py-3 bg-amber-50 text-amber-600 border border-amber-200 rounded-2xl font-black text-xs uppercase tracking-widest active:scale-95 transition-all flex items-center justify-center gap-1.5"><Icon name="wallet" size={14}/> Vendida</button>
+                                                            )}
+                                                            <button onClick={() => setRestoreConfirm(c)} className="flex-1 py-3 bg-emerald-50 text-emerald-600 border border-emerald-100 rounded-2xl font-black text-xs uppercase tracking-widest active:scale-95 transition-all">Restaurar</button>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        ))}
+                                        {lostItemsFlat.length === 0 && (
+                                            <div className="text-center py-10 md:col-span-2 xl:col-span-3">
+                                                <div className="w-16 h-16 bg-slate-100 text-slate-300 rounded-full flex items-center justify-center mx-auto mb-3"><Icon name="archive" size={24}/></div>
+                                                <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{guaranteeSearch ? `Sin resultados para "${guaranteeSearch}"` : 'Nada perdido por aquí'}</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </main>
+                        </div>
+                    )}
+
+                    {/* MODAL CONFIRMAR PERDIDO */}
+                    {markLostConfirm && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[200] flex items-center justify-center p-4">
+                            <div className="bg-white rounded-[2.5rem] p-8 w-full max-w-sm shadow-2xl animate-in text-center">
+                                <div className="w-16 h-16 bg-red-50 text-red-500 rounded-[1.5rem] flex items-center justify-center mx-auto mb-4"><Icon name="alert-triangle" size={28}/></div>
+                                <h3 className="heading-font text-xl font-black text-slate-800 mb-2">¿Marcar como perdido?</h3>
+                                <p className="text-xs font-bold text-slate-500 mb-3">La mercancía de <span className="text-slate-800">{markLostConfirm.name}</span> pasará a la lista de perdidos:</p>
+                                <div className="text-left bg-slate-50 rounded-2xl p-4 mb-6 space-y-1.5 border border-slate-100">
+                                    {(markLostConfirm.loan?.guaranteeItems || []).map((g, i) => (
+                                        <p key={i} className="text-xs font-bold text-slate-600">• {g.code ? `[${g.code}] ` : ''}{g.name || 'Sin nombre'}</p>
+                                    ))}
+                                    {(!markLostConfirm.loan?.guaranteeItems || markLostConfirm.loan.guaranteeItems.length === 0) && (
+                                        <p className="text-xs font-bold text-slate-400">Sin mercancía registrada</p>
+                                    )}
+                                </div>
+                                <div className="flex gap-2">
+                                    <button onClick={() => setMarkLostConfirm(null)} className="flex-1 py-4 bg-slate-100 text-slate-600 rounded-2xl font-black text-xs uppercase tracking-widest active:scale-95 transition-all">Cancelar</button>
+                                    <button onClick={async () => {
+                                        const p = db.collection('users').doc(adminUid).collection('clients').doc(markLostConfirm.id).update({ 'loan.guaranteeStatus': 'lost', 'loan.lostAt': formatDate(new Date()) });
+                                        if(isOnline) await p.catch(e=>e);
+                                        setMarkLostConfirm(null); showNotify("Pasado a la lista de perdidos");
+                                    }} className="flex-1 py-4 bg-red-500 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-red-500/30 active:scale-95 transition-all">Confirmar</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* MODAL RESTAURAR GARANTÍA */}
+                    {restoreConfirm && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[200] flex items-center justify-center p-4">
+                            <div className="bg-white rounded-[2.5rem] p-8 w-full max-w-sm shadow-2xl animate-in text-center">
+                                <div className="w-16 h-16 bg-emerald-50 text-emerald-500 rounded-[1.5rem] flex items-center justify-center mx-auto mb-4"><Icon name="refresh-cw" size={28}/></div>
+                                <h3 className="heading-font text-xl font-black text-slate-800 mb-2">¿Restaurar garantía?</h3>
+                                <p className="text-xs font-bold text-slate-500 mb-6">La mercancía de <span className="text-slate-800">{restoreConfirm.name}</span> volverá a la lista de garantías activas.</p>
+                                <div className="flex gap-2">
+                                    <button onClick={() => setRestoreConfirm(null)} className="flex-1 py-4 bg-slate-100 text-slate-600 rounded-2xl font-black text-xs uppercase tracking-widest active:scale-95 transition-all">Cancelar</button>
+                                    <button onClick={async () => {
+                                        const p = db.collection('users').doc(adminUid).collection('clients').doc(restoreConfirm.id).update({ 'loan.guaranteeStatus': 'active', 'loan.lostAt': null });
+                                        if(isOnline) await p.catch(e=>e);
+                                        setRestoreConfirm(null); showNotify("Garantía restaurada");
+                                    }} className="flex-1 py-4 bg-emerald-500 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-emerald-500/30 active:scale-95 transition-all">Restaurar</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* LIGHTBOX: AMPLIAR FOTO DE MERCANCÍA PERDIDA */}
+                    {enlargedImg && (
+                        <div onClick={() => setEnlargedImg(null)} className="fixed inset-0 bg-black/90 backdrop-blur-sm z-[300] flex flex-col items-center justify-center p-4 cursor-zoom-out animate-in">
+                            <button onClick={() => setEnlargedImg(null)} className="absolute top-5 right-5 w-11 h-11 bg-white/10 text-white rounded-full flex items-center justify-center active:scale-95"><Icon name="x" size={20}/></button>
+                            {enlargedImg.name && <p className="text-white font-black text-sm mb-4 text-center break-words max-w-full">{enlargedImg.name}</p>}
+                            <img src={enlargedImg.src} className="max-w-full max-h-[80vh] rounded-2xl object-contain shadow-2xl" alt={enlargedImg.name || 'Artículo perdido'} />
+                            <p className="text-white/50 text-[10px] font-black uppercase tracking-widest mt-4">Toca para cerrar</p>
+                        </div>
+                    )}
+
+                    {/* MODAL MARCAR COMO VENDIDA */}
+                    {markSoldConfirm && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[200] flex items-center justify-center p-4">
+                            <div className="bg-white rounded-[2.5rem] p-8 w-full max-w-sm shadow-2xl animate-in text-center">
+                                <div className="w-16 h-16 bg-amber-50 text-amber-500 rounded-[1.5rem] flex items-center justify-center mx-auto mb-4"><Icon name="wallet" size={28}/></div>
+                                <h3 className="heading-font text-xl font-black text-slate-800 mb-2">¿Marcar como vendida?</h3>
+                                <p className="text-xs font-bold text-slate-500 mb-6"><span className="text-slate-800">{markSoldConfirm.item?.name || 'El artículo'}</span> {markSoldConfirm.item?.code ? `(${markSoldConfirm.item.code}) ` : ''}se marcará como vendido y <span className="text-red-500">su foto se eliminará</span> para no acumular imágenes.</p>
+                                <div className="flex gap-2">
+                                    <button onClick={() => setMarkSoldConfirm(null)} className="flex-1 py-4 bg-slate-100 text-slate-600 rounded-2xl font-black text-xs uppercase tracking-widest active:scale-95 transition-all">Cancelar</button>
+                                    <button onClick={handleMarkItemSold} disabled={isProcessing} className="flex-1 py-4 bg-amber-500 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-amber-500/30 active:scale-95 transition-all disabled:opacity-50">{isProcessing ? '...' : 'Sí, Vendida'}</button>
+                                </div>
+                            </div>
                         </div>
                     )}
 
@@ -2229,10 +2584,10 @@
                                 const p = db.collection('users').doc(adminUid).collection('clients').add(data); 
                                 if(isOnline) await p.catch(e=>console.log(e));
                                 setView('dashboard'); setNewClientImageFront(null); setNewClientImageBack(null); setClientLocation(null); showNotify(userProfile?.role === 'admin' ? "Registrado correctamente" : "Enviado para aprobación"); 
-                            }} className="p-6 space-y-5">
+                            }} className="p-6 space-y-5 lg:grid lg:grid-cols-2 lg:gap-5 lg:space-y-0 lg:max-w-4xl lg:mx-auto">
                                 
                                 {/* FRENTE Y DORSO DE CEDULA */}
-                                <div className="space-y-1.5">
+                                <div className="space-y-1.5 lg:col-span-2">
                                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Foto / Documento de Identidad</label>
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className="flex flex-col items-center justify-center p-3 border-2 border-dashed border-indigo-200 rounded-2xl bg-indigo-50/50 transition-all h-36">
@@ -2288,9 +2643,9 @@
                                     <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">WhatsApp</label><input name="phone" type="tel" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500" required /></div>
                                 </div>
                                 <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Correo</label><input name="email" type="email" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500" /></div>
-                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Dirección Física</label><textarea name="address" rows="3" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500"></textarea></div>
+                                <div className="space-y-1.5 lg:col-span-2"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Dirección Física</label><textarea name="address" rows="3" className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500"></textarea></div>
                                 
-                                <div className="space-y-1.5 pt-2">
+                                <div className="space-y-1.5 pt-2 lg:col-span-2">
                                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Ubicación GPS (Opcional)</label>
                                     <div className="flex gap-2">
                                         <button type="button" onClick={captureLocation} disabled={isProcessing} className={`flex-1 p-4 rounded-2xl font-black text-sm flex items-center justify-center gap-2 active:scale-95 transition-all border ${clientLocation ? 'bg-emerald-50 text-emerald-600 border-emerald-200 shadow-inner' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}>
@@ -2303,7 +2658,7 @@
                                     <p className="text-[9px] font-bold text-slate-400 px-2 mt-1">Presiona esto cuando estés en la casa/negocio del cliente para guardar la coordenada satelital exacta.</p>
                                 </div>
 
-                                <button type="submit" className="w-full bg-indigo-600 text-white p-5 rounded-[2.2rem] font-black text-lg shadow-xl shadow-indigo-600/30 active:scale-95 transition-transform mt-4">Guardar Cliente</button>
+                                <button type="submit" className="w-full bg-indigo-600 text-white p-5 rounded-[2.2rem] font-black text-lg shadow-xl shadow-indigo-600/30 active:scale-95 transition-transform mt-4 lg:col-span-2 lg:mt-0">Guardar Cliente</button>
                             </form>
                         </div>
                     )}
@@ -2338,7 +2693,7 @@
                                 } finally {
                                     setIsProcessing(false);
                                 }
-                            }} className="p-6 space-y-5">
+                            }} className="p-6 space-y-5 lg:grid lg:grid-cols-2 lg:gap-5 lg:space-y-0 lg:max-w-4xl lg:mx-auto">
                                 
                                 <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Nombre Completo</label><input name="name" type="text" defaultValue={selectedClient.name} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500" required /></div>
                                 
@@ -2356,9 +2711,9 @@
                                     <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">WhatsApp</label><input name="phone" type="tel" defaultValue={selectedClient.phone} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500" required /></div>
                                 </div>
                                 <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Correo</label><input name="email" type="email" defaultValue={selectedClient.email} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500" /></div>
-                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Dirección Física</label><textarea name="address" rows="3" defaultValue={selectedClient.address} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500"></textarea></div>
+                                <div className="space-y-1.5 lg:col-span-2"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Dirección Física</label><textarea name="address" rows="3" defaultValue={selectedClient.address} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500"></textarea></div>
                                 
-                                <div className="space-y-1.5 pt-2">
+                                <div className="space-y-1.5 pt-2 lg:col-span-2">
                                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Ubicación GPS</label>
                                     <div className="flex gap-2">
                                         <button type="button" onClick={captureLocation} disabled={isProcessing} className={`flex-1 p-4 rounded-2xl font-black text-sm flex items-center justify-center gap-2 active:scale-95 transition-all border ${clientLocation ? 'bg-emerald-50 text-emerald-600 border-emerald-200 shadow-inner' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}>
@@ -2370,7 +2725,7 @@
                                     </div>
                                 </div>
 
-                                <button type="submit" disabled={isProcessing} className="w-full bg-indigo-600 text-white p-5 rounded-[2.2rem] font-black text-lg shadow-xl shadow-indigo-600/30 active:scale-95 transition-transform mt-4">{isProcessing ? 'Guardando...' : 'Guardar Cambios'}</button>
+                                <button type="submit" disabled={isProcessing} className="w-full bg-indigo-600 text-white p-5 rounded-[2.2rem] font-black text-lg shadow-xl shadow-indigo-600/30 active:scale-95 transition-transform mt-4 lg:col-span-2 lg:mt-0">{isProcessing ? 'Guardando...' : 'Guardar Cambios'}</button>
                             </form>
                         </div>
                     )}
@@ -2388,7 +2743,7 @@
                                 </div>
                             </header>
 
-                            <main className="p-6 space-y-6">
+                            <main className="p-6 space-y-6 lg:grid lg:grid-cols-2 lg:gap-6 lg:space-y-0 lg:items-start">
                                 <div className="bg-white rounded-[2.8rem] p-8 border border-slate-100 shadow-sm flex flex-col items-center text-center pt-8 relative">
                                     
                                     <div className="grid grid-cols-2 gap-4 w-full max-w-[320px] mx-auto mb-6">
@@ -2440,7 +2795,8 @@
                                         </div>
                                     </div>
 
-                                    <h3 className="heading-font text-2xl font-black text-slate-800 leading-tight mt-2">{selectedClient.name}</h3>
+                                    <h3 className="heading-font text-2xl font-black text-slate-800 leading-tight mt-2 break-words">{selectedClient.name}</h3>
+                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Ruta: {selectedClient.route || 'General'}</p>
                                     
                                     <div className="flex flex-wrap justify-center gap-2 mt-2 mb-6">
                                         <a href={`https://wa.me/${selectedClient.phone.replace(/\D/g, '').length === 10 ? '1' + selectedClient.phone.replace(/\D/g, '') : selectedClient.phone.replace(/\D/g, '')}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center justify-center gap-2 bg-emerald-50 text-emerald-600 px-4 py-1.5 rounded-full font-bold text-sm hover:bg-emerald-100 active:scale-95 transition-all border border-emerald-100 shadow-sm">
@@ -2531,9 +2887,34 @@
                                                     <p className="font-bold text-slate-700 text-sm">{(selectedClient.loan.nextPaymentDate && !selectedClient.loan.nextPaymentDate.includes('NaN')) ? selectedClient.loan.nextPaymentDate : 'Pendiente'}</p>
                                                 </div>
                                                 <div className="text-right">
-                                                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">{selectedClient.loan.type === 'Rédito' ? 'Interés' : 'Progreso'}</p>
-                                                    <p className="font-bold text-slate-700 text-sm">{selectedClient.loan.type === 'Rédito' ? `${selectedClient.loan.interest}%` : `${selectedClient.loan.paidInstallments}/${selectedClient.loan.totalInstallments} Cuotas`}</p>
+                                                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">{isReditoStyle(selectedClient.loan) ? 'Interés' : 'Progreso'}</p>
+                                                    <p className="font-bold text-slate-700 text-sm">{isReditoStyle(selectedClient.loan) ? `${selectedClient.loan.interest}%` : `${selectedClient.loan.paidInstallments}/${selectedClient.loan.totalInstallments} Cuotas`}</p>
                                                 </div>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* MERCANCÍA EN GARANTÍA (perfil del cliente) */}
+                                    {(selectedClient.loan?.type === 'P-GARANTIA' && selectedClient.loan?.guaranteeItems?.length > 0) && (
+                                        <div className="w-full bg-emerald-50/60 p-6 rounded-[2rem] border border-emerald-100 text-left space-y-3">
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Mercancía en Garantía {selectedClient.loan.guaranteeStatus === 'lost' && <span className="text-red-500">(Perdida)</span>}</p>
+                                            {(() => { const dl = guaranteeDeadlineInfo(selectedClient.loan?.guaranteeDeadline); return dl.label && (
+                                                <div className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border text-[10px] font-black uppercase tracking-widest ${dl.expired ? 'bg-red-50 border-red-200 text-red-600' : dl.daysLeft <= 7 ? 'bg-amber-50 border-amber-200 text-amber-600' : 'bg-white border-emerald-200 text-emerald-700'}`}>
+                                                    <Icon name="bell" size={14}/>
+                                                    <span>{dl.expired ? `Vencida el ${dl.label}` : dl.daysLeft === 0 ? 'Vence hoy' : dl.daysLeft <= 7 ? `Vence en ${dl.daysLeft} ${dl.daysLeft === 1 ? 'día' : 'días'}` : `Límite: ${dl.label}`}</span>
+                                                </div>
+                                            ); })()}
+                                            <div className="grid grid-cols-2 gap-3">
+                                                {selectedClient.loan.guaranteeItems.map((g, i) => (
+                                                    <div key={i} className="bg-white rounded-2xl border border-emerald-100 overflow-hidden shadow-sm">
+                                                        {g.img && <img src={g.img} className="w-full h-28 object-cover" alt={g.name || 'Garantía'} />}
+                                                        <div className="p-2.5 space-y-1">
+                                                            {g.code && <span className="text-[8px] font-black bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-md uppercase tracking-widest">{g.code}</span>}
+                                                            {g.sold && <span className="text-[8px] font-black bg-emerald-500 text-white px-1.5 py-0.5 rounded-md uppercase tracking-widest ml-1">Vendida</span>}
+                                                            <p className="font-bold text-slate-700 text-xs">{g.name || 'Sin nombre'}</p>
+                                                        </div>
+                                                    </div>
+                                                ))}
                                             </div>
                                         </div>
                                     )}
@@ -2564,7 +2945,8 @@
                                                 null
                                             ) : (
                                                 <button onClick={() => { 
-                                                    setLoanForm({ amount: '', interest: userProfile?.defaultInterest || '', installments: '1', type: 'Amortizado', interestType: 'Fijo', frequency: 'Mensual', startDate: new Date().toISOString().split('T')[0] });
+                                                    setLoanForm({ amount: '', interest: userProfile?.defaultInterest || '', installments: '1', type: 'Amortizado', interestType: 'Fijo', frequency: 'Mensual', startDate: new Date().toISOString().split('T')[0], guaranteeCalc: 'redito', guaranteeDeadline: '' });
+                                                    setGuaranteeItems([]);
                                                     setView('assign_loan'); 
                                                 }} className="w-full py-5 bg-indigo-600 text-white rounded-[1.8rem] font-black flex items-center justify-center gap-3 active:scale-95 transition-transform"><Icon name="trending-up" size={20} /> Asignar Nuevo Préstamo</button>
                                             )}
@@ -2572,7 +2954,7 @@
                                     )}
                                 </div>
 
-                                <div className="space-y-4 pb-20">
+                                <div className="space-y-4 pb-20 lg:col-span-2">
                                     <div className="flex justify-between items-center px-4">
                                         <h4 className="heading-font font-black text-[11px] uppercase text-slate-400 tracking-widest">Historial de Pagos</h4>
                                         {selectedClient.history?.length > 0 && userProfile?.role !== 'empleado' && userProfile?.role !== 'cobrador' && (
@@ -2605,12 +2987,29 @@
                             
                             <form onSubmit={async (e) => { 
                                 e.preventDefault(); 
-                                const { amount, interest, installments, type, interestType, frequency, startDate } = loanForm;
+                                // Validar que los códigos de garantía no se repitan
+                                if (loanForm.type === 'P-GARANTIA') {
+                                    const seenCodes = new Set();
+                                    for (const it of guaranteeItems) {
+                                        const c = (it.code || '').toUpperCase().trim();
+                                        if (!c) continue;
+                                        if (seenCodes.has(c) || allGuaranteeCodes.has(c)) {
+                                            showNotify(`El código ${c} ya está en uso`);
+                                            return;
+                                        }
+                                        seenCodes.add(c);
+                                    }
+                                }
+                                const { amount, interest, installments, type, interestType, frequency, startDate, guaranteeCalc } = loanForm;
                                 const loanData = { 
                                     amount: parseFloat(amount), interest: parseFloat(interest), totalInstallments: parseInt(installments) || 1, paidInstallments: 0, 
-                                    type, interestType: type === 'Rédito' ? 'N/A' : interestType, frequency, 
+                                    type, interestType: (type === 'Rédito' || (type === 'P-GARANTIA' && guaranteeCalc !== 'amortizado')) ? 'N/A' : interestType, frequency, 
                                     totalToPay: loanPreview.totalToPay, installmentAmount: loanPreview.installmentAmount, 
-                                    startDate: formatDate(parseDateString(startDate)), nextPaymentDate: calculateNextDate(formatDate(parseDateString(startDate)), frequency) 
+                                    startDate: formatDate(parseDateString(startDate)), nextPaymentDate: calculateNextDate(formatDate(parseDateString(startDate)), frequency),
+                                    guaranteeItems: type === 'P-GARANTIA' ? guaranteeItems : [],
+                                    guaranteeStatus: type === 'P-GARANTIA' ? 'active' : null,
+                                    guaranteeCalc: type === 'P-GARANTIA' ? (guaranteeCalc || 'redito') : null,
+                                    guaranteeDeadline: (type === 'P-GARANTIA' && loanForm.guaranteeDeadline) ? formatDate(parseDateString(loanForm.guaranteeDeadline)) : null
                                 }; 
                                 let p;
                                 if (userProfile?.role === 'admin') {
@@ -2621,9 +3020,10 @@
                                     showNotify("Préstamo enviado para aprobación"); 
                                 }
                                 if (isOnline) await p.catch(e=>e);
+                                setGuaranteeItems([]);
                                 setView('profile'); 
-                            }} className="p-6 space-y-6">
-                                <div className="bg-slate-900 text-white rounded-[2rem] p-6 shadow-xl relative overflow-hidden">
+                            }} className="p-6 space-y-6 lg:grid lg:grid-cols-2 lg:gap-6 lg:space-y-0 lg:max-w-4xl lg:mx-auto">
+                                <div className="bg-slate-900 text-white rounded-[2rem] p-6 shadow-xl relative overflow-hidden lg:col-span-2">
                                     <div className="absolute -right-6 -top-6 w-24 h-24 bg-indigo-500/20 rounded-full blur-xl"></div>
                                     <h3 className="text-[10px] font-black uppercase tracking-widest text-indigo-400 mb-4">Resumen de Préstamo</h3>
                                     <div className="grid grid-cols-2 gap-4 mb-4">
@@ -2638,20 +3038,39 @@
                                     </div>
                                     <div className="flex justify-between items-center pt-3 border-t border-slate-700/50">
                                         <p className="text-[9px] text-slate-400 uppercase tracking-widest">Interés Total Generado</p>
-                                        <p className="font-bold text-sm text-indigo-300">{currency}{Math.round(loanPreview.totalInterest).toLocaleString()} {loanForm.type === 'Rédito' && <span className="text-[8px] uppercase">/ {loanForm.frequency}</span>}</p>
+                                        <p className="font-bold text-sm text-indigo-300">{currency}{Math.round(loanPreview.totalInterest).toLocaleString()} {isReditoStyle({ type: loanForm.type, guaranteeCalc: loanForm.guaranteeCalc }) && <span className="text-[8px] uppercase">/ {loanForm.frequency}</span>}</p>
                                     </div>
                                 </div>
 
                                 <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Monto del Préstamo ({currency})</label><input type="number" value={loanForm.amount} onChange={e => setLoanForm({...loanForm, amount: e.target.value})} className="w-full p-5 bg-slate-50 border border-slate-200 rounded-[1.5rem] font-black text-xl text-center outline-none focus:border-indigo-500 text-indigo-600" required /></div>
                                 
                                 <div className="grid grid-cols-2 gap-4">
-                                    <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Modalidad</label><select value={loanForm.type} onChange={e => setLoanForm({...loanForm, type: e.target.value, installments: (e.target.value === 'Rédito' || e.target.value === 'TIPO SAM') ? '1' : loanForm.installments})} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500 appearance-none text-center cursor-pointer"><option value="Amortizado">Amortizado</option><option value="Rédito">Solo Rédito</option>
+                                    <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Modalidad</label><select value={loanForm.type} onChange={e => setLoanForm({...loanForm, type: e.target.value, installments: (e.target.value === 'Rédito' || e.target.value === 'TIPO SAM' || (e.target.value === 'P-GARANTIA' && loanForm.guaranteeCalc !== 'amortizado')) ? '1' : loanForm.installments})} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500 appearance-none text-center cursor-pointer"><option value="Amortizado">Amortizado</option><option value="Rédito">Solo Rédito</option>
 <option value="TIPO SAM" className="font-bold text-indigo-600">TIPO SAM</option>
+<option value="P-GARANTIA" className="font-bold text-emerald-600">P-GARANTIA</option>
 </select></div>
                                     <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">% Interés</label><input type="number" step="0.1" value={loanForm.interest} onChange={e => setLoanForm({...loanForm, interest: e.target.value})} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold text-center outline-none focus:border-indigo-500" required /></div>
                                 </div>
 
-                                {loanForm.type === 'Amortizado' && (
+                                {loanForm.type === 'P-GARANTIA' && (
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Forma de Pago de la Garantía</label>
+                                        <div className="flex bg-slate-100 p-1 rounded-2xl">
+                                            <button type="button" onClick={() => setLoanForm({...loanForm, guaranteeCalc: 'redito', installments: '1'})} className={`flex-1 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all ${loanForm.guaranteeCalc !== 'amortizado' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-400'}`}>Solo Rédito</button>
+                                            <button type="button" onClick={() => setLoanForm({...loanForm, guaranteeCalc: 'amortizado'})} className={`flex-1 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all ${loanForm.guaranteeCalc === 'amortizado' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-400'}`}>Amortizado</button>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {loanForm.type === 'P-GARANTIA' && (
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Fecha Límite de la Garantía (Opcional)</label>
+                                        <input type="date" value={loanForm.guaranteeDeadline || ''} onChange={e => setLoanForm({...loanForm, guaranteeDeadline: e.target.value})} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold text-center outline-none focus:border-emerald-500 text-slate-700" />
+                                        <p className="text-[9px] font-bold text-slate-400 px-2">Aunque siga pagando los réditos, al llegar esta fecha la mercancía se considera perdida.</p>
+                                    </div>
+                                )}
+
+                                {(loanForm.type === 'Amortizado' || (loanForm.type === 'P-GARANTIA' && loanForm.guaranteeCalc === 'amortizado')) && (
                                     <div className="space-y-1.5">
                                         <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Cálculo de Interés</label>
                                         <div className="flex bg-slate-100 p-1 rounded-2xl">
@@ -2663,12 +3082,71 @@
                                 
                                 <div className="grid grid-cols-2 gap-4">
                                     <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Frecuencia</label><select value={loanForm.frequency} onChange={e => setLoanForm({...loanForm, frequency: e.target.value})} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold outline-none focus:border-indigo-500 appearance-none text-center cursor-pointer"><option value="Diario">Diario</option><option value="Semanal">Semanal</option><option value="Quincenal">Quincenal</option><option value="Mensual">Mensual</option></select></div>
-                                    <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Total Cuotas</label><input type="number" min="1" value={loanForm.installments} onChange={e => setLoanForm({...loanForm, installments: e.target.value})} disabled={loanForm.type === 'Rédito'} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold text-center outline-none focus:border-indigo-500 disabled:opacity-50" required /></div>
+                                    <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Total Cuotas</label><input type="number" min="1" value={loanForm.installments} onChange={e => setLoanForm({...loanForm, installments: e.target.value})} disabled={loanForm.type === 'Rédito' || (loanForm.type === 'P-GARANTIA' && loanForm.guaranteeCalc !== 'amortizado')} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold text-center outline-none focus:border-indigo-500 disabled:opacity-50" required /></div>
                                 </div>
 
-                                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Fecha de Entrega</label><input type="date" value={loanForm.startDate} onChange={e => setLoanForm({...loanForm, startDate: e.target.value})} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold text-center outline-none focus:border-indigo-500 text-slate-700" required /></div>
+                                <div className="space-y-1.5 lg:col-span-2"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Fecha de Entrega</label><input type="date" value={loanForm.startDate} onChange={e => setLoanForm({...loanForm, startDate: e.target.value})} className="w-full p-4 bg-slate-50 border rounded-2xl font-bold text-center outline-none focus:border-indigo-500 text-slate-700" required /></div>
 
-                                <button type="submit" className="w-full bg-emerald-500 text-white p-5 rounded-[2.2rem] font-black text-lg shadow-xl shadow-emerald-500/30 active:scale-95 transition-transform mt-6">Aprobar Préstamo</button>
+                                {/* FOTOS DE LA MERCANCÍA EN GARANTÍA (solo P-GARANTIA) */}
+                                {loanForm.type === 'P-GARANTIA' && (
+                                    <div className="space-y-3 bg-emerald-50/60 border border-emerald-100 rounded-[1.8rem] p-5 lg:col-span-2">
+                                        <div className="flex justify-between items-center">
+                                            <label className="text-[10px] font-black text-emerald-700 uppercase tracking-widest ml-1">Mercancía en Garantía</label>
+                                            <span className="text-[9px] font-black text-emerald-600 uppercase bg-white px-2 py-1 rounded-lg border border-emerald-100">{guaranteeItems.length} foto(s)</span>
+                                        </div>
+                                        <p className="text-[10px] font-bold text-emerald-600/70 px-1">Tómale foto a cada cosa que deje el cliente y escríbele su nombre.</p>
+                                        <div className="space-y-3">
+                                            {guaranteeItems.map((g) => (
+                                                <div key={g.id} className="bg-white rounded-2xl border border-emerald-100 p-3 flex gap-3 items-center shadow-sm">
+                                                    <div className="w-20 h-20 shrink-0 rounded-xl overflow-hidden bg-emerald-50 border border-dashed border-emerald-200 flex items-center justify-center relative">
+                                                        {g.img ? (
+                                                            <React.Fragment>
+                                                                <img src={g.img} className="w-full h-full object-cover" alt={g.name || 'Garantía'} />
+                                                                <label className="absolute bottom-1 right-1 bg-slate-900/60 text-white p-1.5 rounded-lg backdrop-blur-sm cursor-pointer">
+                                                                    <Icon name="camera" size={12}/>
+                                                                    <input type="file" accept="image/*" className="hidden" onChange={async (e) => {
+                                                                        const file = e.target.files[0];
+                                                                        if(file) { const compressed = await compressImage(file); setGuaranteeItems(prev => prev.map(it => it.id === g.id ? {...it, img: compressed} : it)); }
+                                                                    }} />
+                                                                </label>
+                                                            </React.Fragment>
+                                                        ) : (
+                                                            <label className="flex flex-col items-center justify-center cursor-pointer w-full h-full text-emerald-500">
+                                                                <Icon name="camera" size={22} className="mb-1"/>
+                                                                <span className="text-[8px] font-black uppercase tracking-widest text-center leading-tight">Tomar<br/>Foto</span>
+                                                                <input type="file" accept="image/*" className="hidden" onChange={async (e) => {
+                                                                    const file = e.target.files[0];
+                                                                    if(file) { const compressed = await compressImage(file); setGuaranteeItems(prev => prev.map(it => it.id === g.id ? {...it, img: compressed} : it)); }
+                                                                }} />
+                                                            </label>
+                                                        )}
+                                                    </div>
+                                                    <div className="flex-1 space-y-1.5 min-w-0">
+                                                        <div className="flex gap-2">
+                                                            <input type="text" placeholder="Código / Identificador (Ej: G-001)" value={g.code || ''} onChange={e => setGuaranteeItems(prev => prev.map(it => it.id === g.id ? {...it, code: e.target.value.toUpperCase()} : it))} className={`flex-1 min-w-0 p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm outline-none focus:border-emerald-500 uppercase ${((g.code || '').trim() !== '' && isCodeInUse(g.code, g.id)) ? 'border-red-400 bg-red-50 focus:border-red-500' : ''}`} />
+                                                            <button type="button" onClick={() => { const nc = generateNextCode(guaranteeItems, g.id); setGuaranteeItems(prev => prev.map(it => it.id === g.id ? {...it, code: nc} : it)); showNotify(`Código ${nc} asignado`); }} className="px-3 bg-emerald-100 text-emerald-700 rounded-xl active:scale-95 transition-all shrink-0 flex items-center justify-center border border-emerald-200" title="Generar siguiente código disponible">
+                                                                <Icon name="refresh-cw" size={16}/>
+                                                            </button>
+                                                        </div>
+                                                        {((g.code || '').trim() !== '' && isCodeInUse(g.code, g.id)) && (
+                                                            <p className="text-[10px] font-black text-red-500 uppercase tracking-widest px-1">⚠ Este código ya está en uso</p>
+                                                        )}
+                                                        <input type="text" placeholder="Nombre de lo que dejó (Ej: TV Samsung 50)" value={g.name} onChange={e => setGuaranteeItems(prev => prev.map(it => it.id === g.id ? {...it, name: e.target.value} : it))} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm outline-none focus:border-emerald-500" />
+                                                        <button type="button" onClick={() => setGuaranteeItems(prev => prev.filter(it => it.id !== g.id))} className="text-[9px] font-black uppercase tracking-widest text-red-400 hover:text-red-600">Quitar</button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <button type="button" onClick={() => setGuaranteeItems(prev => {
+                                            const nc = generateNextCode(prev, null);
+                                            return [...prev, {id: Date.now().toString() + Math.random().toString(36).slice(2), name: '', code: nc, img: null}];
+                                        })} className="w-full py-4 bg-white border-2 border-dashed border-emerald-300 text-emerald-600 rounded-2xl font-black text-xs uppercase tracking-widest active:scale-95 transition-all flex items-center justify-center gap-2">
+                                            <Icon name="camera" size={16}/> Agregar Mercancía
+                                        </button>
+                                    </div>
+                                )}
+
+                                <button type="submit" className="w-full bg-emerald-500 text-white p-5 rounded-[2.2rem] font-black text-lg shadow-xl shadow-emerald-500/30 active:scale-95 transition-transform mt-6 lg:col-span-2 lg:mt-0">Aprobar Préstamo</button>
                             </form>
                         </div>
                     )}
@@ -2685,7 +3163,7 @@
                                 </div>
 
                                 <div className="space-y-6">
-                                    {(selectedClient.loan?.type === 'Rédito' || selectedClient.loan?.type === 'Amortizado' || selectedClient.loan?.type === 'TIPO SAM') && (
+                                    {(selectedClient.loan?.type === 'Rédito' || selectedClient.loan?.type === 'Amortizado' || selectedClient.loan?.type === 'TIPO SAM' || selectedClient.loan?.type === 'P-GARANTIA') && (
                                         <div className="flex bg-slate-100 p-1 rounded-2xl mb-4">
                                             <button onClick={() => {
                                                 setTransactionType('Interés');
@@ -2765,6 +3243,21 @@
                                         <div className="flex justify-between text-sm"><span className="text-slate-400 font-bold">Referencia</span><span className="font-black text-slate-800">{receiptData.transaction.ref}</span></div>
                                         <div className="flex justify-between text-sm"><span className="text-slate-400 font-bold">Tipo de Pago</span><span className="font-black text-slate-800">{receiptData.transaction.type}</span></div>
                                         <div className="flex justify-between text-sm"><span className="text-slate-400 font-bold">Concepto</span><span className="font-black text-slate-800 text-right max-w-[150px]">{receiptData.transaction.description}</span></div>
+                                        {loanModalityLabel(receiptData.client.loan) !== '' && (
+                                            <div className="flex justify-between text-sm"><span className="text-slate-400 font-bold">Modalidad</span><span className="font-black text-emerald-700 text-right max-w-[160px]">{loanModalityLabel(receiptData.client.loan)}</span></div>
+                                        )}
+                                        {(receiptData.client.loan?.type === 'P-GARANTIA' && receiptData.client.loan?.guaranteeDeadline) && (
+                                            <div className="flex justify-between text-sm"><span className="text-slate-400 font-bold">Vence Garantía</span><span className="font-black text-red-600">{receiptData.client.loan.guaranteeDeadline}</span></div>
+                                        )}
+                                        
+                                        {(receiptData.client.loan?.type === 'P-GARANTIA' && (receiptData.client.loan?.guaranteeItems || []).length > 0) && (
+                                            <div className="pt-3 mt-3 border-t border-slate-200 border-dashed space-y-1.5">
+                                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Mercancía en Garantía</p>
+                                                {receiptData.client.loan.guaranteeItems.map((g, i) => (
+                                                    <div key={i} className="flex justify-between text-xs gap-2"><span className="text-slate-500 font-bold truncate">{g.name || 'Sin nombre'}</span><span className="font-black text-slate-700 shrink-0">{g.code || ''}</span></div>
+                                                ))}
+                                            </div>
+                                        )}
                                         
                                         <div className="pt-3 mt-3 border-t border-slate-200 border-dashed space-y-2">
                                             <div className="flex justify-between text-sm"><span className="text-slate-500 font-bold">Monto Recibido</span><span className="font-black text-slate-800">{currency}{Math.round(receiptData.transaction.amount).toLocaleString()}</span></div>
@@ -2888,8 +3381,8 @@
                                 </div>
                             </header>
 
-                            <main className="p-6 space-y-6">
-                                <div className="grid grid-cols-2 gap-3">
+                            <main className="p-6 space-y-6 lg:grid lg:grid-cols-2 lg:gap-6 lg:space-y-0 lg:items-start">
+                                <div className="grid grid-cols-2 gap-3 lg:col-span-2">
                                     <div className="bg-indigo-600 text-white p-5 rounded-[1.5rem] shadow-lg shadow-indigo-200">
                                         <p className="text-[9px] font-black uppercase tracking-widest text-indigo-200 mb-1">Ingreso Total</p>
                                         <p className="text-xl font-black">{currency}{Math.round(monthlyCollected).toLocaleString()}</p>
@@ -2982,7 +3475,7 @@
                                 <h2 className="heading-font text-xl font-black text-slate-800">Gestión de Rutas</h2>
                             </header>
 
-                            <main className="p-6 space-y-6">
+                            <main className="p-6 space-y-6 lg:grid lg:grid-cols-2 lg:gap-6 lg:space-y-0 lg:items-start">
                                 {/* Agregar nueva ruta */}
                                 <div className="bg-white p-5 rounded-[2rem] border border-slate-100 shadow-sm">
                                     <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-3 ml-2">Añadir Nueva Ruta / Sector</h3>
@@ -3028,12 +3521,13 @@
 
                                 {/* Lista de Rutas */}
                                 <div className="space-y-3">
-                                    <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-2">Rutas Existentes ({routesList.length})</h3>
+                                    <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-2">Rutas Existentes ({routesList.length}{userProfile?.maxRoutes !== undefined ? ` de ${userProfile.maxRoutes}` : ''})</h3>
                                     <div className="space-y-2">
                                         {routesList.map((ruta, idx) => {
                                             // Calcular métricas en tiempo real para esta ruta
                                             const clientsInRoute = clients.filter(c => c.route === ruta);
                                             const capitalInRoute = clientsInRoute.reduce((sum, c) => sum + (c.totalDebt || 0), 0);
+                                            const cobradoresEnRuta = cobradores.filter(cb => cb.assignedRoute === ruta);
                                             const isExpanded = expandedRoute === ruta;
                                             
                                             return (
@@ -3041,10 +3535,13 @@
                                                     <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-indigo-500"></div>
                                                     
                                                     <div className="flex justify-between items-center pl-2 cursor-pointer w-full" onClick={() => setExpandedRoute(isExpanded ? null : ruta)}>
-                                                        <div>
-                                                            <h4 className="font-black text-slate-800 text-lg leading-none mb-1">{ruta}</h4>
+                                                        <div className="min-w-0">
+                                                            <h4 className="font-black text-slate-800 text-lg leading-none mb-1 break-words">{ruta}</h4>
                                                             <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
                                                                 {clientsInRoute.length} Clientes • {currency}{Math.round(capitalInRoute).toLocaleString()}
+                                                            </p>
+                                                            <p className="text-[9px] font-bold text-indigo-400 uppercase tracking-widest mt-0.5">
+                                                                {cobradoresEnRuta.length > 0 ? `Cobrador: ${cobradoresEnRuta.map(cb => cb.name).join(', ')}` : 'Sin cobrador asignado'}
                                                             </p>
                                                         </div>
                                                         <div className="flex items-center gap-2">
@@ -3109,7 +3606,7 @@
                                 <h2 className="heading-font text-xl font-black text-slate-800">Ajustes Generales</h2>
                             </header>
 
-                            <main className="p-6 space-y-6">
+                            <main className="p-6 space-y-6 lg:grid lg:grid-cols-2 lg:gap-6 lg:space-y-0 lg:items-start lg:max-w-5xl lg:mx-auto">
                                 {/* Perfil del Administrador */}
                                 <div className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm text-center">
                                     <div className="w-20 h-20 bg-indigo-50 text-indigo-600 rounded-[1.5rem] flex items-center justify-center mx-auto mb-4 border border-indigo-100 shadow-inner overflow-hidden">
@@ -3167,6 +3664,11 @@
                                         <div className="space-y-1.5">
                                             <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Moneda</label>
                                             <input type="text" defaultValue={userProfile?.currency || ''} onBlur={(e) => handleUpdateSetting('currency', e.target.value)} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:border-indigo-500" placeholder="Ej: RD$, $, €" />
+                                        </div>
+                                        <div className="space-y-1.5">
+                                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Capital Inicial del Negocio ({currency})</label>
+                                            <input type="number" min="0" defaultValue={userProfile?.initialCapital || ''} onBlur={(e) => handleUpdateSetting('initialCapital', e.target.value ? parseFloat(e.target.value) : null)} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:border-indigo-500" placeholder="Ej: 500000" />
+                                            <p className="text-[9px] font-bold text-slate-400 px-1">Con cuánto dinero empezó tu negocio. Se muestra en el panel junto al capital disponible para prestar.</p>
                                         </div>
                                         <div className="space-y-1.5">
                                             <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Pie de página en recibos</label>
@@ -3258,9 +3760,6 @@
                                                 <input type="file" accept=".json" className="hidden" onChange={importBackup} />
                                             </label>
                                         </div>
-                                        <button onClick={() => setWipeSystemConfirm(true)} className="w-full py-4 bg-red-50 text-red-600 border border-red-100 rounded-xl font-black text-xs uppercase tracking-widest active:scale-95 transition-all flex items-center justify-center gap-2 mt-4">
-                                            <Icon name="trash-2" size={16}/> Limpieza Total de Sistema
-                                        </button>
                                     </div>
                                 </div>
 
