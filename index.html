@@ -315,6 +315,7 @@
             // Modal de cobro rápido (botón central de la barra inferior)
             const [quickCobrarOpen, setQuickCobrarOpen] = useState(false);
             const [quickCobrarSearch, setQuickCobrarSearch] = useState('');
+            const [notifOpen, setNotifOpen] = useState(false);
 
             const [refinanceModal, setRefinanceModal] = useState(false);
             const [refinanceForm, setRefinanceForm] = useState({ amount: '', interest: '', inst: '' });
@@ -1578,7 +1579,12 @@
                 const dl = guaranteeDeadlineInfo(c.loan.guaranteeDeadline);
                 return !!dl.expired;
             }).length, [displayedClients]);
-            const alertsCount = overdueClients.length + expiredGuaranteesCount;
+            const expiringSoonGuaranteesCount = useMemo(() => displayedClients.filter(c => {
+                if (!c.loan || c.loan.type !== 'P-GARANTIA' || c.loan.guaranteeStatus === 'lost') return false;
+                const dl = guaranteeDeadlineInfo(c.loan.guaranteeDeadline);
+                return !!dl.label && !dl.expired && dl.daysLeft !== null && dl.daysLeft <= 7;
+            }).length, [displayedClients]);
+            const alertsCount = overdueClients.length + expiredGuaranteesCount + (pendingApprovalsCount || 0);
             // Clientes para el cobro rápido (con deuda activa), filtrados por búsqueda
             const quickCobrarClients = useMemo(() => {
                 const s = normalizeStr(quickCobrarSearch);
@@ -1648,6 +1654,7 @@
                         }
                     }
                     if (portfolioFilter === 'approvals') matchFilter = c.status === 'pending_approval' || !!c.pendingLoan;
+                    if (portfolioFilter === 'garantia') matchFilter = c.loan && c.loan.type === 'P-GARANTIA' && (c.totalDebt || 0) > 0.1;
                     
                     let matchRoute = true;
                     if (portfolioRouteFilter !== 'Todas') matchRoute = c.route === portfolioRouteFilter;
@@ -1691,7 +1698,7 @@
             const selectedClient = clients.find(c => c.id === selectedClientId);
             const isRestrictedRole = userProfile?.role === 'empleado' || userProfile?.role === 'cobrador';
 
-            return (
+            return (<>
                 <div className="mx-auto min-h-screen bg-slate-50 shadow-2xl relative overflow-x-hidden max-w-md md:max-w-2xl lg:max-w-5xl xl:max-w-6xl 2xl:max-w-7xl">
                     {!isOnline && (
                         <div className="bg-orange-500 text-white text-[10px] font-black uppercase tracking-widest text-center py-2.5 flex items-center justify-center gap-2 z-[105] sticky top-0 shadow-md border-b border-orange-600 no-print">
@@ -2103,83 +2110,112 @@
                     )}
 
                     {view === 'dashboard' && (
-                        <div className="animate-in pb-20">
-                            <header className="bg-white rounded-b-[3rem] px-6 pt-10 pb-8 shadow-sm border-b border-slate-100 relative z-10">
-                                <div className="flex justify-between items-start mb-6 relative">
-                                    <div className="flex-1">
+                        <div className="animate-in pb-28 md:pb-10">
+                            <header className="px-6 pt-8 pb-2 relative z-10">
+                                {/* Saludo + acciones */}
+                                <div className="flex justify-between items-start mb-4">
+                                    <div className="flex items-center gap-3 min-w-0">
+                                        {userProfile?.logo ? (
+                                            <img src={userProfile.logo} alt="Logo" className="w-11 h-11 rounded-2xl object-cover shadow-sm border border-slate-200 flex-shrink-0" />
+                                        ) : (
+                                            <div className="w-11 h-11 rounded-2xl bg-indigo-600 text-white flex items-center justify-center font-black text-lg shadow-sm flex-shrink-0">{(userProfile?.companyName || 'C')[0]}</div>
+                                        )}
+                                        <div className="min-w-0">
+                                            <h2 className="heading-font text-xl font-black text-slate-800 leading-tight">{greeting}</h2>
+                                            <p className="text-[11px] text-slate-400 font-bold capitalize">{todayLong}</p>
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-2 flex-shrink-0">
                                         {userProfile?.role === 'cobrador' && (
-                                            <button onClick={() => auth.signOut()} className="p-2 bg-slate-100 text-slate-600 rounded-xl active:scale-95"><Icon name="log-out" size={16}/></button>
+                                            <button onClick={() => auth.signOut()} className="w-10 h-10 bg-white text-slate-400 rounded-2xl flex items-center justify-center shadow-sm border border-slate-100 active:scale-95"><Icon name="log-out" size={16}/></button>
                                         )}
-                                    </div>
-                                    <div className="flex flex-col items-center justify-center z-10 -mt-2">
-                                        <LogoSVG customUrl={userProfile?.logo} className="w-40 h-40 lg:w-32 lg:h-32 drop-shadow-md" color="#4f46e5" />
-                                        {isRestrictedRole && <span className="bg-amber-100 text-amber-700 text-[9px] px-2 py-0.5 rounded-full font-black uppercase tracking-widest inline-block -mt-6 relative z-10 shadow-sm border border-amber-200">
-                                            {userProfile?.role === 'cobrador' ? `Ruta: ${userProfile.assignedRoute}` : 'Modo Empleado'}
-                                        </span>}
-                                        {!isLocked && daysRemaining !== null && (
-                                            <span className="bg-indigo-100 text-indigo-700 text-[10px] px-3 py-1 rounded-full font-black uppercase mt-2">{daysRemaining} días restantes</span>
-                                        )}
-                                    </div>
-                                    <div className="flex gap-2 flex-1 justify-end z-10 pt-4">
+                                        <button onClick={() => setNotifOpen(true)} className="w-10 h-10 bg-white text-slate-400 rounded-2xl flex items-center justify-center shadow-sm border border-slate-100 active:scale-95 relative">
+                                            <Icon name="bell" size={18}/>
+                                            {alertsCount > 0 && <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 bg-red-500 text-white text-[10px] font-black rounded-full flex items-center justify-center border-2 border-slate-50">{alertsCount}</span>}
+                                        </button>
                                         {!isRestrictedRole && (
-                                            <button onClick={() => setView('earnings')} className="w-10 h-10 bg-slate-50 text-slate-400 rounded-2xl flex items-center justify-center hover:bg-slate-100 active:scale-95 transition-all shadow-sm border border-slate-100"><Icon name="pie-chart"/></button>
+                                            <button onClick={() => setView('earnings')} className="w-10 h-10 bg-white text-slate-400 rounded-2xl flex items-center justify-center shadow-sm border border-slate-100 active:scale-95"><Icon name="pie-chart" size={18}/></button>
                                         )}
                                         {userProfile?.role !== 'cobrador' && (
-                                            <button onClick={() => setView('settings')} className="w-10 h-10 bg-slate-50 text-slate-400 rounded-2xl flex items-center justify-center hover:bg-slate-100 active:scale-95 transition-all shadow-sm border border-slate-100"><Icon name="settings"/></button>
+                                            <button onClick={() => setView('settings')} className="w-10 h-10 bg-white text-slate-400 rounded-2xl flex items-center justify-center shadow-sm border border-slate-100 active:scale-95"><Icon name="settings" size={18}/></button>
                                         )}
                                     </div>
                                 </div>
-                                <div className="xl:grid xl:grid-cols-3 xl:gap-6 xl:items-stretch">
-                                <div className="bg-indigo-600 rounded-[2.5rem] p-7 text-white shadow-2xl shadow-indigo-600/40 relative overflow-hidden xl:col-span-2">
+                                <div className="flex flex-wrap gap-2 mb-4">
+                                    {isRestrictedRole && <span className="bg-amber-100 text-amber-700 text-[9px] px-2.5 py-1 rounded-full font-black uppercase tracking-widest border border-amber-200">{userProfile?.role === 'cobrador' ? `Ruta: ${userProfile.assignedRoute}` : 'Modo Empleado'}</span>}
+                                    {!isLocked && daysRemaining !== null && (
+                                        <span className="bg-indigo-100 text-indigo-700 text-[9px] px-2.5 py-1 rounded-full font-black uppercase tracking-widest">{daysRemaining} días restantes</span>
+                                    )}
+                                </div>
+
+                                <div className="xl:grid xl:grid-cols-5 xl:gap-6 xl:items-stretch">
+                                {/* Cobros de hoy con anillo de progreso */}
+                                <div className="bg-indigo-600 rounded-[2rem] p-6 text-white shadow-xl shadow-indigo-600/30 relative overflow-hidden xl:col-span-3">
                                     <div className="absolute -right-10 -top-10 w-40 h-40 bg-white/10 rounded-full blur-2xl"></div>
                                     <div className="absolute -left-10 -bottom-10 w-40 h-40 bg-indigo-900/30 rounded-full blur-2xl"></div>
-                                    <div className="relative z-10 flex justify-between items-end gap-2">
-                                        <div className="flex-1 min-w-0">
-                                            <p className="text-[8px] sm:text-[10px] font-black uppercase tracking-widest text-indigo-200 mb-1 sm:mb-2">Capital en la Calle</p>
-                                            <h1 className="heading-font text-2xl sm:text-3xl md:text-4xl font-black tracking-tighter break-words">{currency}{privacyMode && !isRestrictedRole ? '***,***' : Math.round(netCapitalOnStreet).toLocaleString()}</h1>
-                                            <div className="mt-1 sm:mt-2 bg-emerald-500/20 px-2 sm:px-3 py-1 rounded-lg inline-block border border-emerald-500/30 max-w-full">
-                                                <p className="text-[8px] sm:text-[9px] text-emerald-300 font-black uppercase tracking-widest leading-relaxed">G. Pendiente: {currency}{privacyMode && !isRestrictedRole ? '***' : Math.round(pendingProfit).toLocaleString()}</p>
-                                            </div>
-                                            {(!isRestrictedRole && parseFloat(userProfile?.initialCapital) > 0) && (
-                                                <div className="mt-1 sm:mt-2 bg-white/10 px-2 sm:px-3 py-1.5 rounded-lg inline-block border border-white/20 max-w-full ml-1">
-                                                    <p className="text-[8px] sm:text-[9px] text-indigo-100 font-black uppercase tracking-widest leading-relaxed">Capital Inicial: {currency}{privacyMode ? '***' : Math.round(parseFloat(userProfile.initialCapital)).toLocaleString()}</p>
-                                                    <p className="text-[8px] sm:text-[9px] text-emerald-200 font-black uppercase tracking-widest leading-relaxed">Disponible: {currency}{privacyMode ? '***' : Math.round(Math.max(0, parseFloat(userProfile.initialCapital) - netCapitalOnStreet)).toLocaleString()}</p>
-                                                </div>
+                                    <div className="relative z-10 flex justify-between items-center gap-4">
+                                        <div className="min-w-0">
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-indigo-200 mb-1">Cobros de hoy</p>
+                                            <p className="text-2xl sm:text-3xl font-black tracking-tight break-words">{currency}{privacyMode && !isRestrictedRole ? '***' : Math.round(totalCollectedToday).toLocaleString()}</p>
+                                            <p className="text-[11px] text-indigo-200 font-bold mt-1">de {currency}{privacyMode && !isRestrictedRole ? '***' : Math.round(expectedToday).toLocaleString()} esperado</p>
+                                            {(userProfile?.historicalGains > 0 && !isRestrictedRole) && (
+                                                <p className="text-[9px] text-indigo-300 font-bold uppercase mt-1">Histórico: {currency}{privacyMode ? '***' : Math.round(userProfile.historicalGains).toLocaleString()}</p>
                                             )}
                                         </div>
-                                        <div className="text-right flex-shrink-0">
-                                            <p className="text-[8px] sm:text-[10px] font-black uppercase tracking-widest text-indigo-200 mb-1 sm:mb-2">Cobrado Hoy</p>
-                                            <h2 className="text-lg sm:text-xl font-black text-emerald-400">+{currency}{privacyMode && !isRestrictedRole ? '***' : Math.round(totalCollectedToday).toLocaleString()}</h2>
-                                            {(userProfile?.historicalGains > 0 && !isRestrictedRole) && (
-                                                <p className="text-[7px] sm:text-[8px] text-indigo-400 font-bold uppercase mt-1">Histórico: {currency}{privacyMode ? '***' : Math.round(userProfile.historicalGains).toLocaleString()}</p>
-                                            )}
+                                        <div className="relative w-24 h-24 sm:w-28 sm:h-28 flex-shrink-0">
+                                            <svg viewBox="0 0 100 100" className="w-full h-full -rotate-90">
+                                                <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(255,255,255,0.18)" strokeWidth="10"/>
+                                                <circle cx="50" cy="50" r="42" fill="none" stroke="#34d399" strokeWidth="10" strokeLinecap="round" strokeDasharray="263.9" strokeDashoffset={263.9 * (1 - collectionPct / 100)} style={{transition: 'stroke-dashoffset 0.7s ease'}}/>
+                                            </svg>
+                                            <div className="absolute inset-0 flex items-center justify-center"><span className="text-xl font-black">{collectionPct}%</span></div>
                                         </div>
                                     </div>
                                 </div>
-                                <div className="mt-6 xl:mt-0 grid grid-cols-4 xl:grid-cols-2 gap-2 md:gap-4">
-                                    <button onClick={() => setView('add_client')} className="bg-slate-50 border border-slate-100 py-3 rounded-2xl flex flex-col items-center justify-center gap-1.5 active:scale-95 transition-transform shadow-sm">
-                                        <div className="w-7 h-7 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center"><Icon name="user-plus" size={14}/></div>
-                                        <span className="font-black text-[9px] text-slate-700 uppercase tracking-widest text-center">Nuevo<br/>Cliente</span>
-                                    </button>
-                                    <button onClick={() => setView('portfolio')} className="bg-slate-50 border border-slate-100 py-3 rounded-2xl flex flex-col items-center justify-center gap-1.5 active:scale-95 transition-transform shadow-sm">
-                                        <div className="w-7 h-7 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center"><Icon name="users" size={14}/></div>
-                                        <span className="font-black text-[9px] text-slate-700 uppercase tracking-widest text-center">Ver<br/>Cartera</span>
-                                    </button>
-                                    <button onClick={() => { setGuaranteeTab('active'); setGuaranteeSearch(''); setView('guarantees'); }} className="bg-slate-50 border border-slate-100 py-3 rounded-2xl flex flex-col items-center justify-center gap-1.5 active:scale-95 transition-transform shadow-sm">
-                                        <div className="w-7 h-7 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center"><Icon name="shield" size={14}/></div>
-                                        <span className="font-black text-[9px] text-slate-700 uppercase tracking-widest text-center">Garan<br/>tías</span>
-                                    </button>
-                                    {!isRestrictedRole ? (
-                                        <button onClick={() => setView('routes_panel')} className="bg-slate-50 border border-slate-100 py-3 rounded-2xl flex flex-col items-center justify-center gap-1.5 active:scale-95 transition-transform shadow-sm">
-                                            <div className="w-7 h-7 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center"><Icon name="map" size={14}/></div>
-                                            <span className="font-black text-[9px] text-slate-700 uppercase tracking-widest text-center">Panel<br/>Rutas</span>
-                                        </button>
-                                    ) : (
-                                        <div className="bg-slate-50 border border-slate-100 py-3 rounded-2xl flex flex-col items-center justify-center opacity-50">
-                                            <div className="w-7 h-7 bg-slate-200 text-slate-400 rounded-full flex items-center justify-center"><Icon name="map" size={14}/></div>
-                                        </div>
-                                    )}
+
+                                {/* Tarjetas 2x2 */}
+                                <div className="grid grid-cols-2 gap-3 mt-4 xl:mt-0 xl:col-span-2">
+                                    <div className="bg-white rounded-3xl p-4 border border-slate-100 shadow-sm">
+                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Capital en la calle</p>
+                                        <p className="text-base sm:text-lg font-black text-slate-800 break-words">{currency}{privacyMode && !isRestrictedRole ? '***' : Math.round(netCapitalOnStreet).toLocaleString()}</p>
+                                    </div>
+                                    <div className="bg-white rounded-3xl p-4 border border-slate-100 shadow-sm">
+                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Disponible</p>
+                                        {parseFloat(userProfile?.initialCapital) > 0 ? (
+                                            <p className="text-base sm:text-lg font-black text-slate-800 break-words">{currency}{privacyMode && !isRestrictedRole ? '***' : Math.round(Math.max(0, parseFloat(userProfile.initialCapital) - netCapitalOnStreet)).toLocaleString()}</p>
+                                        ) : (
+                                            <button onClick={() => setView('settings')} className="text-sm font-black text-indigo-500">Configurar</button>
+                                        )}
+                                    </div>
+                                    <div className="bg-white rounded-3xl p-4 border border-slate-100 shadow-sm">
+                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Cobrado hoy</p>
+                                        <p className="text-base sm:text-lg font-black text-emerald-500 break-words">+{currency}{privacyMode && !isRestrictedRole ? '***' : Math.round(totalCollectedToday).toLocaleString()}</p>
+                                    </div>
+                                    <div className="bg-white rounded-3xl p-4 border border-slate-100 shadow-sm">
+                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Ganancia pendiente</p>
+                                        <p className="text-base sm:text-lg font-black text-slate-800 break-words">{currency}{privacyMode && !isRestrictedRole ? '***' : Math.round(pendingProfit).toLocaleString()}</p>
+                                    </div>
                                 </div>
+                                </div>
+
+                                {/* Accesos rápidos */}
+                                <div className="flex gap-2 overflow-x-auto no-scrollbar mt-4 pb-1">
+                                    <button onClick={() => setView('add_client')} className="flex items-center gap-2 px-4 py-3 bg-white border border-slate-100 rounded-2xl shadow-sm text-[11px] font-black uppercase tracking-widest text-slate-700 whitespace-nowrap active:scale-95">
+                                        <span className="w-6 h-6 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center flex-shrink-0"><Icon name="user-plus" size={13}/></span> Nuevo cliente
+                                    </button>
+                                    <button onClick={() => { setGuaranteeTab('active'); setGuaranteeSearch(''); setView('guarantees'); }} className="flex items-center gap-2 px-4 py-3 bg-white border border-slate-100 rounded-2xl shadow-sm text-[11px] font-black uppercase tracking-widest text-slate-700 whitespace-nowrap active:scale-95 relative">
+                                        <span className="w-6 h-6 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center flex-shrink-0"><Icon name="shield" size={13}/></span> Garantías
+                                        {expiredGuaranteesCount > 0 && <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full border-2 border-slate-50"></span>}
+                                    </button>
+                                    {!isRestrictedRole && (
+                                        <button onClick={() => setView('routes_panel')} className="flex items-center gap-2 px-4 py-3 bg-white border border-slate-100 rounded-2xl shadow-sm text-[11px] font-black uppercase tracking-widest text-slate-700 whitespace-nowrap active:scale-95">
+                                            <span className="w-6 h-6 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center flex-shrink-0"><Icon name="map" size={13}/></span> Rutas
+                                        </button>
+                                    )}
+                                    {!isRestrictedRole && (
+                                        <button onClick={() => setView('earnings')} className="flex items-center gap-2 px-4 py-3 bg-white border border-slate-100 rounded-2xl shadow-sm text-[11px] font-black uppercase tracking-widest text-slate-700 whitespace-nowrap active:scale-95">
+                                            <span className="w-6 h-6 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center flex-shrink-0"><Icon name="pie-chart" size={13}/></span> Reporte
+                                        </button>
+                                    )}
                                 </div>
                             </header>
 
@@ -2285,7 +2321,7 @@
                             
                             <div className="px-6 pt-4 space-y-3">
                                 <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
-                                    {[{id:'all', label:'Todos'}, {id:'active', label:'Activos'}, {id:'overdue', label:'En Mora'}, {id:'inactive', label:'Inactivos'}, {id:'approvals', label:'Por Aprobar'}].map(f => (
+                                    {[{id:'all', label:'Todos'}, {id:'active', label:'Al día'}, {id:'overdue', label:'En mora'}, {id:'garantia', label:'Garantía'}, {id:'inactive', label:'Inactivos'}, {id:'approvals', label:'Por aprobar'}].map(f => (
                                         <button key={f.id} onClick={() => setPortfolioFilter(f.id)} className={`px-5 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap border ${portfolioFilter === f.id ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}>{f.label}</button>
                                     ))}
                                 </div>
@@ -2304,7 +2340,7 @@
                                 </div>
                             </div>
 
-                            <main className="p-6 pt-2 space-y-4 pb-24 lg:grid lg:grid-cols-2 xl:grid-cols-3 lg:gap-4 lg:space-y-0">
+                            <main className="p-6 pt-2 space-y-4 pb-28 md:pb-10 lg:grid lg:grid-cols-2 xl:grid-cols-3 lg:gap-4 lg:space-y-0">
                                 {portfolioFilteredClients.slice(0, visibleClientsCount).map(c => {
                                     let statusText = 'SIN PRÉSTAMO'; let statusColor = 'bg-slate-100 text-slate-500 border-slate-200';
                                     if (c.status === 'pending_approval' || c.pendingLoan) {
@@ -2321,19 +2357,23 @@
                                     <div key={c.id} className="bg-white border border-slate-200 rounded-[1.5rem] shadow-sm overflow-hidden transition-all hover:border-indigo-300">
                                         {/* Cabecera del Acordeón (Click para expandir) */}
                                         <div onClick={() => setExpandedClient(expandedClient === c.id ? null : c.id)} className="p-4 flex justify-between items-center cursor-pointer hover:bg-slate-50 active:bg-slate-100 transition-colors">
-                                            <div className="flex gap-3 items-center">
-                                                <div className="w-10 h-10 rounded-[1rem] flex items-center justify-center font-black text-sm bg-indigo-50 text-indigo-600 border border-indigo-100">{c.name[0]}</div>
+                                            <div className="flex gap-3 items-center min-w-0 flex-1">
+                                                {c.idImageFront ? (
+                                                    <img src={c.idImageFront} alt={c.name} className="w-12 h-12 rounded-2xl object-cover border border-slate-200 flex-shrink-0" />
+                                                ) : (
+                                                    <div className="w-12 h-12 rounded-2xl flex items-center justify-center font-black text-base bg-indigo-50 text-indigo-600 border border-indigo-100 flex-shrink-0">{c.name[0]}</div>
+                                                )}
                                                 <div className="min-w-0">
                                                     <h4 className="font-black text-slate-800 text-sm leading-tight line-clamp-2 break-words">{c.name}</h4>
                                                     <p className="text-[9px] font-bold text-slate-400 tracking-widest mt-0.5 uppercase">Ruta: {c.route || 'General'}</p>
-                                                    <p className={`text-[10px] font-black tracking-widest mt-0.5 ${c.totalDebt > 0.1 ? 'text-slate-500' : 'text-emerald-500'}`}>
-                                                        {c.totalDebt > 0.1 ? `${currency}${(c.totalDebt || 0).toLocaleString()} DEUDA` : 'SIN DEUDA'}
-                                                    </p>
                                                 </div>
                                             </div>
-                                            <div className="flex items-center gap-2">
-                                                <span className={`text-[7px] sm:text-[8px] font-black uppercase tracking-widest px-2 py-1 rounded-md border ${statusColor}`}>{statusText}</span>
-                                                <div className={`w-6 h-6 flex flex-shrink-0 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-transform ${expandedClient === c.id ? 'rotate-90' : '-rotate-90'}`}>
+                                            <div className="flex items-center gap-2 flex-shrink-0">
+                                                <div className="text-right">
+                                                    <p className={`text-sm font-black ${c.totalDebt > 0.1 ? 'text-slate-800' : 'text-emerald-500'}`}>{c.totalDebt > 0.1 ? `${currency}${(c.totalDebt || 0).toLocaleString()}` : 'Sin deuda'}</p>
+                                                    <span className={`inline-block mt-1 text-[7px] sm:text-[8px] font-black uppercase tracking-widest px-2 py-1 rounded-md border ${statusColor}`}>{statusText}</span>
+                                                </div>
+                                                <div className={`w-6 h-6 flex items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-transform ${expandedClient === c.id ? 'rotate-90' : '-rotate-90'}`}>
                                                     <Icon name="arrow-left" size={14} />
                                                 </div>
                                             </div>
@@ -2392,13 +2432,13 @@
                                     </div>
                                 )}
                             </main>
-                            <button onClick={() => setView('add_client')} className="fixed bottom-8 right-8 w-16 h-16 bg-indigo-600 text-white rounded-[2rem] shadow-2xl flex items-center justify-center z-20 hover:scale-105 active:scale-95 transition-all border-4 border-white"><Icon name="user-plus" size={28} /></button>
+                            <button onClick={() => setView('add_client')} className="fixed bottom-24 md:bottom-8 right-6 md:right-8 w-16 h-16 bg-indigo-600 text-white rounded-[2rem] shadow-2xl flex items-center justify-center z-20 hover:scale-105 active:scale-95 transition-all border-4 border-white"><Icon name="user-plus" size={28} /></button>
                         </div>
                     )}
 
                     {/* GARANTÍAS */}
                     {view === 'guarantees' && (
-                        <div className="animate-in bg-white min-h-screen pb-20">
+                        <div className="animate-in bg-white min-h-screen pb-28 md:pb-10">
                             <header className="p-6 border-b flex items-center gap-4 bg-white sticky top-0 z-10 shadow-sm">
                                 <button onClick={() => setView('dashboard')} className="p-3 text-slate-400 bg-slate-50 rounded-2xl hover:bg-slate-100"><Icon name="arrow-left"/></button>
                                 <h2 className="heading-font text-xl font-black text-slate-800">Garantías</h2>
@@ -3424,7 +3464,7 @@
 
                     {/* VISTA DE CAJA Y GANANCIAS */}
                     {view === 'earnings' && (
-                        <div className="animate-in bg-slate-50 min-h-screen pb-20">
+                        <div className="animate-in bg-slate-50 min-h-screen pb-28 md:pb-10">
                             <header className="p-6 border-b bg-white sticky top-0 z-20 shadow-sm flex items-center justify-between">
                                 <div className="flex items-center gap-4">
                                     <button onClick={() => setView('dashboard')} className="p-3 text-slate-400 bg-slate-50 rounded-2xl hover:bg-slate-100 active:scale-95 transition-transform"><Icon name="arrow-left"/></button>
@@ -3520,7 +3560,7 @@
 
                     {/* VISTA DEL PANEL DE RUTAS */}
                     {view === 'routes_panel' && (
-                        <div className="animate-in bg-slate-50 min-h-screen pb-20">
+                        <div className="animate-in bg-slate-50 min-h-screen pb-28 md:pb-10">
                             <header className="p-6 border-b flex items-center gap-4 bg-white sticky top-0 z-20 shadow-sm">
                                 <button onClick={() => setView('dashboard')} className="p-3 text-slate-400 bg-slate-50 rounded-2xl active:scale-95 transition-transform"><Icon name="arrow-left"/></button>
                                 <h2 className="heading-font text-xl font-black text-slate-800">Gestión de Rutas</h2>
@@ -3651,7 +3691,7 @@
 
                     {/* VISTA DE AJUSTES (SETTINGS) */}
                     {view === 'settings' && (
-                        <div className="animate-in bg-slate-50 min-h-screen pb-20">
+                        <div className="animate-in bg-slate-50 min-h-screen pb-28 md:pb-10">
                             <header className="p-6 border-b flex items-center gap-4 bg-white sticky top-0 z-20 shadow-sm">
                                 <button onClick={() => setView('dashboard')} className="p-3 text-slate-400 bg-slate-50 rounded-2xl active:scale-95 transition-transform"><Icon name="arrow-left"/></button>
                                 <h2 className="heading-font text-xl font-black text-slate-800">Ajustes Generales</h2>
@@ -3869,10 +3909,135 @@
                                     </div>
                                 </div>
                             )}
+
+
                         </div>
                     )}
                 </div>
-            );
+                            {/* Barra de navegación inferior (móvil) */}
+                            {['dashboard','portfolio','guarantees','earnings','routes_panel','settings'].includes(view) && (
+                                <nav className="md:hidden fixed bottom-0 left-0 right-0 z-[90] no-print">
+                                    <div className="mx-auto max-w-md bg-white/95 backdrop-blur border-t border-slate-200 shadow-[0_-8px_30px_rgba(0,0,0,0.08)]">
+                                        <div className="grid grid-cols-5 items-end px-1 pt-1.5 pb-[max(0.6rem,env(safe-area-inset-bottom))]">
+                                            <button onClick={() => setView('dashboard')} className={`flex flex-col items-center gap-1 py-1.5 rounded-xl active:scale-95 ${view === 'dashboard' ? 'text-indigo-600' : 'text-slate-400'}`}>
+                                                <Icon name="home" size={22}/><span className="text-[9px] font-black uppercase tracking-widest">Inicio</span>
+                                            </button>
+                                            <button onClick={() => setView('portfolio')} className={`flex flex-col items-center gap-1 py-1.5 rounded-xl active:scale-95 ${view === 'portfolio' ? 'text-indigo-600' : 'text-slate-400'}`}>
+                                                <Icon name="users" size={22}/><span className="text-[9px] font-black uppercase tracking-widest">Cartera</span>
+                                            </button>
+                                            <button onClick={() => { setQuickCobrarSearch(''); setQuickCobrarOpen(true); }} className="flex flex-col items-center gap-1 active:scale-95 -mt-7">
+                                                <span className="w-14 h-14 bg-emerald-500 text-white rounded-full flex items-center justify-center shadow-xl shadow-emerald-500/40 border-4 border-slate-50"><Icon name="plus" size={26}/></span>
+                                                <span className="text-[9px] font-black uppercase tracking-widest text-emerald-600">Cobrar</span>
+                                            </button>
+                                            <button onClick={() => { setGuaranteeTab('active'); setGuaranteeSearch(''); setView('guarantees'); }} className={`flex flex-col items-center gap-1 py-1.5 rounded-xl active:scale-95 relative ${view === 'guarantees' ? 'text-indigo-600' : 'text-slate-400'}`}>
+                                                <Icon name="shield" size={22}/><span className="text-[9px] font-black uppercase tracking-widest">Garantías</span>
+                                                {expiredGuaranteesCount > 0 && <span className="absolute top-0 right-1/2 translate-x-4 w-2.5 h-2.5 bg-red-500 rounded-full border border-white"></span>}
+                                            </button>
+                                            {userProfile?.role !== 'cobrador' ? (
+                                                <button onClick={() => setView('settings')} className={`flex flex-col items-center gap-1 py-1.5 rounded-xl active:scale-95 ${view === 'settings' ? 'text-indigo-600' : 'text-slate-400'}`}>
+                                                    <Icon name="settings" size={22}/><span className="text-[9px] font-black uppercase tracking-widest">Ajustes</span>
+                                                </button>
+                                            ) : <div/>}
+                                        </div>
+                                    </div>
+                                </nav>
+                            )}
+
+                            {/* Modal de cobro rápido */}
+                            {quickCobrarOpen && (
+                                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[300] flex items-end sm:items-center justify-center no-print" onClick={() => setQuickCobrarOpen(false)}>
+                                    <div className="bg-white rounded-t-[2rem] sm:rounded-[2rem] w-full max-w-md p-6 max-h-[82vh] flex flex-col animate-in shadow-2xl" onClick={e => e.stopPropagation()}>
+                                        <div className="flex justify-between items-center mb-4">
+                                            <h3 className="heading-font text-lg font-black text-slate-800">Cobrar a...</h3>
+                                            <button onClick={() => setQuickCobrarOpen(false)} className="p-2 text-slate-400 bg-slate-100 rounded-xl"><Icon name="x" size={16}/></button>
+                                        </div>
+                                        <div className="relative mb-4">
+                                            <Icon name="search" className="absolute left-4 top-3.5 text-slate-300" size={18} />
+                                            <input type="text" placeholder="Buscar cliente..." className="w-full pl-12 p-3.5 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-sm outline-none focus:border-emerald-500" value={quickCobrarSearch} onChange={e => setQuickCobrarSearch(e.target.value)} autoFocus />
+                                        </div>
+                                        <div className="overflow-y-auto space-y-2 -mx-1 px-1 pb-2">
+                                            {quickCobrarClients.map(c => (
+                                                <button key={c.id} onClick={() => { setSelectedClientId(c.id); setTransactionType('Interés'); setQuickCobrarOpen(false); setIsTransacting(true); }} className="w-full p-3 bg-slate-50 border border-slate-100 rounded-2xl flex items-center gap-3 active:scale-[0.98] text-left">
+                                                    {c.idImageFront ? (
+                                                        <img src={c.idImageFront} alt={c.name} className="w-10 h-10 rounded-xl object-cover border border-slate-200 flex-shrink-0" />
+                                                    ) : (
+                                                        <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 border border-indigo-100 flex items-center justify-center font-black flex-shrink-0">{c.name[0]}</div>
+                                                    )}
+                                                    <div className="min-w-0 flex-1">
+                                                        <p className="font-black text-slate-800 text-sm truncate">{c.name}</p>
+                                                        <p className="text-[10px] text-slate-400 font-bold">Cuota: {currency}{Math.round((c.loan.installmentAmount || 0) - (c.loan.partialCredit || 0)).toLocaleString()}</p>
+                                                    </div>
+                                                    <span className="text-[10px] font-black uppercase tracking-widest text-emerald-600 bg-emerald-50 border border-emerald-100 px-2.5 py-1.5 rounded-xl flex-shrink-0">Cobrar</span>
+                                                </button>
+                                            ))}
+                                            {quickCobrarClients.length === 0 && (
+                                                <p className="text-center text-[11px] font-black uppercase text-slate-400 py-8 tracking-widest">Sin resultados</p>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                            {/* Panel de notificaciones */}
+                            {notifOpen && (
+                                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[300] no-print" onClick={() => setNotifOpen(false)}>
+                                    <div className="absolute bottom-0 left-0 right-0 bg-white rounded-t-[2.5rem] p-6 pt-3 max-w-md mx-auto shadow-2xl animate-in max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                                        <div className="w-12 h-1.5 bg-slate-200 rounded-full mx-auto mb-4"></div>
+                                        <div className="flex justify-between items-center mb-4">
+                                            <h3 className="heading-font text-lg font-black text-slate-800">Notificaciones</h3>
+                                            <button onClick={() => setNotifOpen(false)} className="p-2 text-slate-400 bg-slate-100 rounded-xl"><Icon name="x" size={16}/></button>
+                                        </div>
+                                        <div className="space-y-2 pb-2">
+                                            {pendingApprovalsCount > 0 && (
+                                                <button onClick={() => { setNotifOpen(false); setPortfolioFilter('approvals'); setView('portfolio'); }} className="w-full p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-center gap-3 active:scale-[0.98] text-left">
+                                                    <span className="w-10 h-10 bg-amber-200 text-amber-700 rounded-xl flex items-center justify-center flex-shrink-0"><Icon name="user-plus" size={18}/></span>
+                                                    <span className="flex-1 min-w-0">
+                                                        <span className="block font-black text-amber-800 text-sm">Aprobaciones pendientes</span>
+                                                        <span className="block text-[11px] text-amber-600 font-bold">{pendingApprovalsCount} solicitud(es) por revisar</span>
+                                                    </span>
+                                                    <Icon name="arrow-left" size={16} className="text-amber-400 rotate-180 flex-shrink-0"/>
+                                                </button>
+                                            )}
+                                            {overdueClients.length > 0 && (
+                                                <button onClick={() => { setNotifOpen(false); setView('dashboard'); setAgendaTab('vencidos'); }} className="w-full p-4 bg-red-50 border border-red-200 rounded-2xl flex items-center gap-3 active:scale-[0.98] text-left">
+                                                    <span className="w-10 h-10 bg-red-200 text-red-600 rounded-xl flex items-center justify-center flex-shrink-0"><Icon name="alert-triangle" size={18}/></span>
+                                                    <span className="flex-1 min-w-0">
+                                                        <span className="block font-black text-red-700 text-sm">Cuotas vencidas</span>
+                                                        <span className="block text-[11px] text-red-500 font-bold">{overdueClients.length} cliente(s) en mora</span>
+                                                    </span>
+                                                    <Icon name="arrow-left" size={16} className="text-red-400 rotate-180 flex-shrink-0"/>
+                                                </button>
+                                            )}
+                                            {expiredGuaranteesCount > 0 && (
+                                                <button onClick={() => { setNotifOpen(false); setGuaranteeTab('active'); setGuaranteeSearch(''); setView('guarantees'); }} className="w-full p-4 bg-red-50 border border-red-200 rounded-2xl flex items-center gap-3 active:scale-[0.98] text-left">
+                                                    <span className="w-10 h-10 bg-red-200 text-red-600 rounded-xl flex items-center justify-center flex-shrink-0"><Icon name="shield" size={18}/></span>
+                                                    <span className="flex-1 min-w-0">
+                                                        <span className="block font-black text-red-700 text-sm">Garantías vencidas</span>
+                                                        <span className="block text-[11px] text-red-500 font-bold">{expiredGuaranteesCount} lista(s) para marcar como perdida</span>
+                                                    </span>
+                                                    <Icon name="arrow-left" size={16} className="text-red-400 rotate-180 flex-shrink-0"/>
+                                                </button>
+                                            )}
+                                            {expiringSoonGuaranteesCount > 0 && (
+                                                <button onClick={() => { setNotifOpen(false); setGuaranteeTab('active'); setGuaranteeSearch(''); setView('guarantees'); }} className="w-full p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-center gap-3 active:scale-[0.98] text-left">
+                                                    <span className="w-10 h-10 bg-amber-200 text-amber-700 rounded-xl flex items-center justify-center flex-shrink-0"><Icon name="bell" size={18}/></span>
+                                                    <span className="flex-1 min-w-0">
+                                                        <span className="block font-black text-amber-800 text-sm">Garantías por vencer</span>
+                                                        <span className="block text-[11px] text-amber-600 font-bold">{expiringSoonGuaranteesCount} vencen en 7 días o menos</span>
+                                                    </span>
+                                                    <Icon name="arrow-left" size={16} className="text-amber-400 rotate-180 flex-shrink-0"/>
+                                                </button>
+                                            )}
+                                            {alertsCount === 0 && (
+                                                <div className="text-center py-8">
+                                                    <div className="w-14 h-14 bg-emerald-50 text-emerald-500 rounded-full flex items-center justify-center mx-auto mb-3"><Icon name="check-circle-2" size={24}/></div>
+                                                    <p className="text-[11px] font-black uppercase tracking-widest text-slate-400">Todo al día</p>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+            </>);
         };
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
