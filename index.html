@@ -81,6 +81,8 @@
         .heading-font { font-family: 'Plus Jakarta Sans', sans-serif; }
         .animate-in { animation: fadeIn 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .sheet-in { animation: slideUpSheet 0.38s cubic-bezier(0.32, 0.72, 0, 1); }
+        @keyframes slideUpSheet { from { transform: translateY(100%); } to { transform: translateY(0); } }
         .splash-fade-out { animation: splashExit 0.8s forwards ease-in-out; animation-delay: 2.5s; }
         @keyframes splashExit { to { opacity: 0; visibility: hidden; pointer-events: none; } }
         .logo-bounce { animation: logoBounce 2s infinite ease-in-out; }
@@ -757,7 +759,7 @@
                 lostGuarantees.filter(matchesGuaranteeSearch).forEach(c => {
                     const items = c.loan.guaranteeItems || [];
                     if (items.length === 0) out.push({ client: c, item: null, idx: -1 });
-                    else items.forEach((g, idx) => out.push({ client: c, item: g, idx }));
+                    else items.forEach((g, idx) => { if (!g.sold) out.push({ client: c, item: g, idx }); });
                 });
                 return out;
             }, [lostGuarantees, guaranteeSearch]);
@@ -787,6 +789,8 @@
             };
 
             useEffect(() => { const timer = setTimeout(() => setShowSplash(false), 3300); return () => clearTimeout(timer); }, []);
+            // Si se navega desde una notificación, el panel se cierra solo al cambiar de vista
+            useEffect(() => { setNotifOpen(false); }, [view]);
 
             useEffect(() => {
                 let unsubProfile = null;
@@ -3946,7 +3950,7 @@
                             {/* Modal de cobro rápido */}
                             {quickCobrarOpen && (
                                 <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[300] flex items-end sm:items-center justify-center no-print" onClick={() => setQuickCobrarOpen(false)}>
-                                    <div className="bg-white rounded-t-[2rem] sm:rounded-[2rem] w-full max-w-md p-6 max-h-[82vh] flex flex-col animate-in shadow-2xl" onClick={e => e.stopPropagation()}>
+                                    <div className="bg-white rounded-t-[2rem] sm:rounded-[2rem] w-full max-w-md p-6 max-h-[82vh] flex flex-col sheet-in shadow-2xl" onClick={e => e.stopPropagation()}>
                                         <div className="flex justify-between items-center mb-4">
                                             <h3 className="heading-font text-lg font-black text-slate-800">Cobrar a...</h3>
                                             <button onClick={() => setQuickCobrarOpen(false)} className="p-2 text-slate-400 bg-slate-100 rounded-xl"><Icon name="x" size={16}/></button>
@@ -3979,14 +3983,18 @@
                             )}
                             {/* Panel de notificaciones */}
                             {notifOpen && (
-                                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[300] no-print" onClick={() => setNotifOpen(false)}>
-                                    <div className="absolute bottom-0 left-0 right-0 bg-white rounded-t-[2.5rem] p-6 pt-3 max-w-md mx-auto shadow-2xl animate-in max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-                                        <div className="w-12 h-1.5 bg-slate-200 rounded-full mx-auto mb-4"></div>
-                                        <div className="flex justify-between items-center mb-4">
-                                            <h3 className="heading-font text-lg font-black text-slate-800">Notificaciones</h3>
-                                            <button onClick={() => setNotifOpen(false)} className="p-2 text-slate-400 bg-slate-100 rounded-xl"><Icon name="x" size={16}/></button>
-                                        </div>
-                                        <div className="space-y-2 pb-2">
+                                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[300] no-print animate-in" onClick={() => setNotifOpen(false)}>
+                                    <div className="absolute bottom-0 left-0 right-0 max-w-md mx-auto sheet-in" onClick={e => e.stopPropagation()}>
+                                        <div className="bg-white rounded-t-[2.5rem] shadow-2xl max-h-[82vh] flex flex-col overflow-hidden">
+                                            <div className="pt-3 px-6 flex-shrink-0">
+                                                <div className="w-12 h-1.5 bg-slate-200 rounded-full mx-auto mb-4"></div>
+                                                <div className="flex justify-between items-center mb-4">
+                                                    <h3 className="heading-font text-lg font-black text-slate-800">Notificaciones</h3>
+                                                    <button onClick={() => setNotifOpen(false)} className="p-2 text-slate-400 bg-slate-100 rounded-xl"><Icon name="x" size={16}/></button>
+                                                </div>
+                                            </div>
+                                            <div className="overflow-y-auto px-6 pb-6">
+                                                <div className="space-y-2">
                                             {pendingApprovalsCount > 0 && (
                                                 <button onClick={() => { setNotifOpen(false); setPortfolioFilter('approvals'); setView('portfolio'); }} className="w-full p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-center gap-3 active:scale-[0.98] text-left">
                                                     <span className="w-10 h-10 bg-amber-200 text-amber-700 rounded-xl flex items-center justify-center flex-shrink-0"><Icon name="user-plus" size={18}/></span>
@@ -4033,6 +4041,8 @@
                                                     <p className="text-[11px] font-black uppercase tracking-widest text-slate-400">Todo al día</p>
                                                 </div>
                                             )}
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
