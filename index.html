@@ -246,6 +246,12 @@
                 );
             };
 
+        // Hoy en YYYY-MM-DD en hora LOCAL (toISOString usa UTC y cambia el día entre 8pm y 12am)
+        const todayLocalISO = () => {
+            const d = new Date();
+            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        };
+
         const App = () => {
             const [user, setUser] = useState(null);
             const [adminUid, setAdminUid] = useState(null);
@@ -275,7 +281,7 @@
 
             const [cortesHistory, setCortesHistory] = useState([]);
             const [corteStartDate, setCorteStartDate] = useState('');
-            const [corteEndDate, setCorteEndDate] = useState(new Date().toISOString().split('T')[0]);
+            const [corteEndDate, setCorteEndDate] = useState(todayLocalISO());
             const [selectedCorte, setSelectedCorte] = useState(null);
             const [earningsTab, setEarningsTab] = useState('operaciones');
 
@@ -327,7 +333,7 @@
             const [deleteCobradorConfirm, setDeleteCobradorConfirm] = useState(null);
             
             const [loanForm, setLoanForm] = useState({
-                amount: '', interest: '', installments: '1', type: 'Amortizado', interestType: 'Fijo', frequency: 'Mensual', startDate: new Date().toISOString().split('T')[0]
+                amount: '', interest: '', installments: '1', type: 'Amortizado', interestType: 'Fijo', frequency: 'Mensual', startDate: todayLocalISO()
             });
 
             // P-GARANTIA: fotos de la mercancía dejada en garantía (cada una con su nombre y código)
@@ -1156,10 +1162,17 @@
                     
                     // Calculate gain based on loan type
                     if (loanType === 'Rédito' || loanType === 'TIPO SAM' || loanType === 'P-GARANTIA') {
-                        gainAmount = transactionType === 'Interés' || loanType === 'TIPO SAM' ? amount : 0;
+                        // Solo el pago de interés es ganancia; el abono a capital devuelve principal (no es ganancia)
+                        gainAmount = transactionType === 'Interés' ? amount : 0;
                     } else {
-                        // Amortizado
-                        gainAmount = installmentsCovered > 0 ? (installmentsCovered * instBaseAmount * (client.loan.interest / (100 + client.loan.interest))) : 0;
+                        // Amortizado: ganancia por cuota = interés total / número de cuotas
+                        // (la fórmula anterior con interest/(100+interest) solo era correcta para interés 'Fijo';
+                        //  en 'Por Cuota' subestimaba la ganancia)
+                        const loanTotalInterest = (client.loan.totalToPay || 0) - (client.loan.amount || 0);
+                        const loanTotalInst = client.loan.totalInstallments || 1;
+                        gainAmount = (installmentsCovered > 0 && loanTotalInterest > 0)
+                            ? installmentsCovered * (loanTotalInterest / loanTotalInst)
+                            : 0;
                     }
                     
                     let gainRecord = {
@@ -1483,6 +1496,7 @@
                         'loan.interest': parseFloat(editLoanData.interest) || 0,
                         'loan.installmentAmount': parseFloat(editLoanData.installmentAmount) || 0,
                         'loan.totalInstallments': parseInt(editLoanData.totalInstallments) || 1,
+                        'loan.totalToPay': updatedTotalDebt,
                         'loan.paidInstallments': parseInt(editLoanData.paidInstallments) || 0,
                         'loan.nextPaymentDate': editLoanData.nextPaymentDate
                     });
@@ -2945,7 +2959,7 @@
                                                 null
                                             ) : (
                                                 <button onClick={() => { 
-                                                    setLoanForm({ amount: '', interest: userProfile?.defaultInterest || '', installments: '1', type: 'Amortizado', interestType: 'Fijo', frequency: 'Mensual', startDate: new Date().toISOString().split('T')[0], guaranteeCalc: 'redito', guaranteeDeadline: '' });
+                                                    setLoanForm({ amount: '', interest: userProfile?.defaultInterest || '', installments: '1', type: 'Amortizado', interestType: 'Fijo', frequency: 'Mensual', startDate: todayLocalISO(), guaranteeCalc: 'redito', guaranteeDeadline: '' });
                                                     setGuaranteeItems([]);
                                                     setView('assign_loan'); 
                                                 }} className="w-full py-5 bg-indigo-600 text-white rounded-[1.8rem] font-black flex items-center justify-center gap-3 active:scale-95 transition-transform"><Icon name="trending-up" size={20} /> Asignar Nuevo Préstamo</button>
@@ -3202,7 +3216,7 @@
                                     <div className="grid grid-cols-2 gap-4">
                                         <div className="space-y-2 text-center">
                                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Fecha Pago</label>
-                                            <input id="inputDate" type="date" defaultValue={new Date().toISOString().split('T')[0]} className="w-full p-4 bg-slate-50 border rounded-2xl font-black text-center focus:border-indigo-500 outline-none text-slate-700 text-xs" />
+                                            <input id="inputDate" type="date" defaultValue={todayLocalISO()} className="w-full p-4 bg-slate-50 border rounded-2xl font-black text-center focus:border-indigo-500 outline-none text-slate-700 text-xs" />
                                         </div>
                                         <div className="space-y-2 text-center">
                                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Recibido ({currency})</label>
