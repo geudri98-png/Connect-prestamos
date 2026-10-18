@@ -10,9 +10,55 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Connect">
-    <link rel="apple-touch-icon" href="icon-192.png">
+    <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/geudri98-png/Connect-prestamos/23ac554dea034e3dc9675fe2abffa052d83ad021/connectprestamos%20logopng%20(1).png">
     
-    <link rel="manifest" href="manifest.json">
+    <link id="dynamic-manifest" rel="manifest">
+    
+    <script>
+        const manifestData = {
+            name: "Connect Préstamos",
+            short_name: "Connect",
+            start_url: window.location.href.split('?')[0].split('#')[0],
+            display: "standalone",
+            background_color: "#f8fafc",
+            theme_color: "#0f172a",
+            icons: [
+                { src: "https://raw.githubusercontent.com/geudri98-png/Connect-prestamos/23ac554dea034e3dc9675fe2abffa052d83ad021/connectprestamos%20logopng%20(1).png", sizes: "192x192", type: "image/png", purpose: "any" },
+                { src: "https://raw.githubusercontent.com/geudri98-png/Connect-prestamos/23ac554dea034e3dc9675fe2abffa052d83ad021/connectprestamos%20logopng%20(1).png", sizes: "512x512", type: "image/png", purpose: "any" }
+            ]
+        };
+        const manifestBlob = new Blob([JSON.stringify(manifestData)], { type: 'application/manifest+json' });
+        document.getElementById('dynamic-manifest').href = URL.createObjectURL(manifestBlob);
+
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                const swCode = `
+                    const CACHE_NAME = 'connect-pro-v1';
+                    const ASSETS = [
+                        '/',
+                        'https://cdn.tailwindcss.com',
+                        'https://unpkg.com/react@18/umd/react.production.min.js',
+                        'https://unpkg.com/react-dom@18/umd/react-dom.production.min.js',
+                        'https://unpkg.com/@babel/standalone/babel.min.js',
+                        'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js',
+                        'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'
+                    ];
+                    self.addEventListener('install', e => {
+                        e.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)));
+                    });
+                    self.addEventListener('fetch', e => {
+                        e.respondWith(
+                            caches.match(e.request).then(res => res || fetch(e.request))
+                        );
+                    });
+                `;
+                const blob = new Blob([swCode], { type: 'application/javascript' });
+                navigator.serviceWorker.register(URL.createObjectURL(blob)).catch(err => {
+                    console.log('SW Error:', err);
+                });
+            });
+        }
+    </script>
 
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -578,8 +624,13 @@
             };
 
             // P-GARANTIA: listas de perfiles con mercancía en garantía y perdidos (vencidas primero)
+            // Si toda la mercancía ya se vendió, el préstamo no cuenta como garantía vigente/vencida
+            const hasUnsoldGuaranteeItems = (loan) => {
+                const items = (loan && loan.guaranteeItems) || [];
+                return items.length === 0 || items.some((g) => !g.sold);
+            };
             const activeGuarantees = useMemo(() => displayedClients
-                .filter(c => c.loan && c.loan.type === 'P-GARANTIA' && c.loan.guaranteeStatus !== 'lost')
+                .filter(c => c.loan && c.loan.type === 'P-GARANTIA' && c.loan.guaranteeStatus !== 'lost' && hasUnsoldGuaranteeItems(c.loan))
                 .sort((a, b) => {
                     const da = parseGuaranteeDate(a.loan?.guaranteeDeadline);
                     const db = parseGuaranteeDate(b.loan?.guaranteeDeadline);
@@ -1533,12 +1584,12 @@
             const expectedToday = useMemo(() => dueToday.reduce((acc, c) => acc + Math.max(0, (c.loan.installmentAmount || 0) - (c.loan.partialCredit || 0)), 0), [dueToday]);
             const collectionPct = expectedToday > 0 ? Math.min(100, Math.round((totalCollectedToday / expectedToday) * 100)) : (totalCollectedToday > 0 ? 100 : 0);
             const expiredGuaranteesCount = useMemo(() => displayedClients.filter(c => {
-                if (!c.loan || c.loan.type !== 'P-GARANTIA' || c.loan.guaranteeStatus === 'lost') return false;
+                if (!c.loan || c.loan.type !== 'P-GARANTIA' || c.loan.guaranteeStatus === 'lost' || !hasUnsoldGuaranteeItems(c.loan)) return false;
                 const dl = guaranteeDeadlineInfo(c.loan.guaranteeDeadline);
                 return !!dl.expired;
             }).length, [displayedClients]);
             const expiringSoonGuaranteesCount = useMemo(() => displayedClients.filter(c => {
-                if (!c.loan || c.loan.type !== 'P-GARANTIA' || c.loan.guaranteeStatus === 'lost') return false;
+                if (!c.loan || c.loan.type !== 'P-GARANTIA' || c.loan.guaranteeStatus === 'lost' || !hasUnsoldGuaranteeItems(c.loan)) return false;
                 const dl = guaranteeDeadlineInfo(c.loan.guaranteeDeadline);
                 return !!dl.label && !dl.expired && dl.daysLeft !== null && dl.daysLeft <= 7;
             }).length, [displayedClients]);
@@ -4006,15 +4057,6 @@
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
-    </script>
-
-    <script>
-        // PWA: registra el Service Worker real
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('sw.js').catch(err => console.log('SW:', err));
-            });
-        }
     </script>
 </body>
 </html>
